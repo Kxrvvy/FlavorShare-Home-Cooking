@@ -1,0 +1,40 @@
+# Core framework
+Django>=5.0,<5.3
+djangorestframework>=3.15
+
+# Database
+mysqlclient>=2.2.1
+
+# Image handling (required for ImageField validation/processing)
+Pillow>=10.0
+
+# Environment variables (keep DB creds/secret key/API keys out of settings.py)
+django-environ>=0.11
+
+# Authentication (JWT)
+djangorestframework-simplejwt>=5.3.0
+
+# CORS (needed since Next.js frontend calls the Django API from a different origin/port)
+django-cors-headers>=4.3.0
+
+# Image storage
+cloudinary>=1.40.0
+django-cloudinary-storage>=0.3.0
+
+# External API calls (Nutrition API, Email service)
+requests>=2.31.0
+
+# Email service (pick one based on what you choose)
+sendgrid>=6.11.0
+# OR
+# resend>=0.8.0
+
+# Filtering support for DRF (search/filter/sort/pagination requirement)
+django-filter>=24.0
+
+# Production deployment
+gunicorn>=22.0
+whitenoise>=6.6
+
+# Testing
+pytest-django>=4.8
