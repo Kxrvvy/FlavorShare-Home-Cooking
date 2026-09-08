@@ -89,10 +89,24 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.username
 
     @property
+    def is_admin(self):
+        """The project's Admin role
+
+        Single source of truth for "is this an admin?" - accounts.permissions
+        and every admin-only view read this instead of comparing role strings
+        themselves, so the rule only ever changes in one place.
+
+        A superuser counts as an admin so `createsuperuser` accounts can reach
+        admin-only endpoints without their role being edited by hand.
+        """
+        return self.is_superuser or self.role == self.Role.ADMIN
+
+    @property
     def is_staff(self):
         """Django admin gate.
 
         Derived from `role` rather than stored, so no is_staff column is
-        added beyond what the SQL defines.
+        added beyond what the SQL defines. Same rule as `is_admin`, kept under
+        a separate name because Django looks for `is_staff` specifically.
         """
-        return self.is_superuser or self.role == self.Role.ADMIN
+        return self.is_admin
