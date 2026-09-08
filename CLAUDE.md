@@ -172,6 +172,11 @@ correct and complete as of the last review.
 - `Image` is a **model inside the `recipes` app**, not its own separate
   Django app (it only exists in service of a recipe, so it doesn't meet
   the bar for being its own feature/app).
+- **Framework tables:** Django and SimpleJWT create their own tables in
+  `flavorshare_db` (sessions, migrations, content types, permissions,
+  admin log, token blacklist), so the live database holds more tables
+  than the 15 above. These are infrastructure, not part of the
+  application data model, and are intentionally excluded from this ERD.
 
 ---
 

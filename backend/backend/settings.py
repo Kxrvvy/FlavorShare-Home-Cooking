@@ -19,7 +19,8 @@ import environ
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Read configuration from environment variables, falling back to the defaults
-# below so a fresh clone runs without a .env file. See .env.example.
+# below so a fresh clone runs without a .env file. No .env of any kind is
+# committed - README.md lists the keys and what each one does.
 env = environ.Env(
     DEBUG=(bool, True),
     ALLOWED_HOSTS=(list, ['localhost', '127.0.0.1']),
@@ -38,6 +39,25 @@ DEBUG = env('DEBUG')
 
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 
+# Production hardening. Everything here is scoped to DEBUG=False so local
+# development is unaffected - none of it works over plain http, and turning
+# it on locally just makes the dev server unreachable.
+if not DEBUG:
+    # Render terminates TLS at its proxy and forwards over http, so Django
+    # only learns the original request was https from this header. Without
+    # it, SECURE_SSL_REDIRECT sees http and redirects forever.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    # Start at one hour. Raise it once the deployment is known good - HSTS is
+    # hard to walk back, since browsers cache the instruction for its full
+    # duration and will refuse http for that long.
+    SECURE_HSTS_SECONDS = 3600
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
 
 # Application definition
 
@@ -51,6 +71,9 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'rest_framework_simplejwt',
+    # Stores issued refresh tokens so logout and rotation can revoke them.
+    # Adds two tables; they are framework infrastructure, not part of the ERD.
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
 
@@ -192,9 +215,18 @@ SIMPLE_JWT = {
     'USER_ID_FIELD': 'user_id',
     'USER_ID_CLAIM': 'user_id',
 
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    # Kept short on purpose. Logout revokes the refresh token, but an access
+    # token stays valid until it expires - nothing can recall one already
+    # issued - so this window is how long a "logged out" token still works.
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+
+    # Each refresh issues a new refresh token and blacklists the one used, so
+    # a stolen token stops working as soon as the real user refreshes.
+    # Rotation without blacklisting would leave the old token valid.
     'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+
     'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
