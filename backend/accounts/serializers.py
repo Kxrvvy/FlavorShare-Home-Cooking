@@ -57,6 +57,40 @@ class RegisterSerializer(serializers.ModelSerializer):
         return User.objects.create_user(**validated_data)
 
 
+class AdminUserSerializer(serializers.ModelSerializer):
+    """Admin-facing view of any account, for the account management endpoints.
+
+    Only `role` and `is_active` are writable - the two levers CLAUDE.md gives
+    Admins ("remove, promote to admin"). A user's own username, email and
+    dietary preferences stay theirs to edit via /me/, so a moderation action
+    cannot quietly rewrite someone's profile.
+    """
+
+    is_admin = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'user_id',
+            'username',
+            'email',
+            'role',
+            'is_admin',
+            'is_active',
+            'dietary_preferences',
+            'created_at',
+            'last_login',
+        ]
+        read_only_fields = [
+            'user_id',
+            'username',
+            'email',
+            'dietary_preferences',
+            'created_at',
+            'last_login',
+        ]
+
+
 class PasswordChangeSerializer(serializers.Serializer):
     """Payload for changing your own password.
 

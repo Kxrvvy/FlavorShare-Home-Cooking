@@ -192,6 +192,32 @@ Three things that will otherwise cost you an afternoon:
   refresh tokens are revoked, so the frontend must send the user back through
   login afterwards rather than reusing the token it holds.
 
+### Admin only
+
+Requires an account with `role = admin` (or a superuser). Anything else gets
+`403`.
+
+| Method | Endpoint | Body | Returns |
+|---|---|---|---|
+| `GET` | `/api/accounts/users/` | — | `200` + a paginated list of accounts |
+| `GET` | `/api/accounts/users/<id>/` | — | `200` + one account |
+| `PATCH` | `/api/accounts/users/<id>/` | `role` and/or `is_active` | `200` + the updated account |
+| `DELETE` | `/api/accounts/users/<id>/` | — | `204`, no body |
+
+List supports `?search=` (username, email), `?role=`, `?is_active=`, and
+`?ordering=` (`username`, `created_at`, `role`; prefix with `-` to reverse).
+
+- **`DELETE` deactivates — it does not delete.** The row stays, `is_active`
+  goes `False`, and the account's recipes and reviews survive. Undo with
+  `PATCH {"is_active": true}`. Deactivating also revokes that account's
+  refresh tokens, so an existing session can't outlive it.
+- **Admins can only change `role` and `is_active`.** Username, email, and
+  dietary preferences stay read-only here, so moderation can't rewrite
+  someone's profile.
+- **You can't demote or deactivate yourself.** Returns `400`. Another admin
+  has to do it — otherwise the last admin could lock everyone out.
+- **There is no `POST`.** Accounts are only created by signing up.
+
 ---
 
 ## Troubleshooting

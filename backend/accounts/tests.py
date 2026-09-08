@@ -448,6 +448,168 @@ class PasswordChangeTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class AdminUserManagementTests(APITestCase):
+    """Admin-only account management under /api/accounts/users/."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='boss',
+            email='boss@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+        self.member = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        self.list_url = reverse('admin-user-list')
+        self.member_url = reverse('admin-user-detail', args=[self.member.user_id])
+        self.own_url = reverse('admin-user-detail', args=[self.admin.user_id])
+
+    # --- access control -------------------------------------------------
+
+    def test_registered_user_is_denied(self):
+        self.client.force_authenticate(user=self.member)
+        self.assertEqual(
+            self.client.get(self.list_url).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_anonymous_is_denied(self):
+        self.client.force_authenticate(user=None)
+        self.assertEqual(
+            self.client.get(self.list_url).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_admin_can_list_accounts(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 2)
+
+    def test_accounts_cannot_be_created_here(self):
+        """Signup is the only way in - an admin cannot mint an account."""
+        response = self.client.post(
+            self.list_url, {'username': 'new', 'email': 'new@example.com'}
+        )
+        self.assertEqual(
+            response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
+    # --- promoting and demoting ----------------------------------------
+
+    def test_admin_can_promote_a_user(self):
+        response = self.client.patch(self.member_url, {'role': User.Role.ADMIN})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_admin)
+
+    def test_admin_can_demote_another_admin(self):
+        self.member.role = User.Role.ADMIN
+        self.member.save(update_fields=['role'])
+
+        self.client.patch(self.member_url, {'role': User.Role.REGISTERED})
+
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_admin)
+
+    def test_admin_cannot_demote_themselves(self):
+        response = self.client.patch(self.own_url, {'role': User.Role.REGISTERED})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_admin)
+
+    def test_admin_cannot_deactivate_themselves(self):
+        response = self.client.patch(self.own_url, {'is_active': False})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_profile_fields_are_not_editable_by_admins(self):
+        """Moderation must not quietly rewrite someone's profile."""
+        response = self.client.patch(
+            self.member_url,
+            {'username': 'renamed', 'email': 'hijack@example.com'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.username, 'cook')
+        self.assertEqual(self.member.email, 'cook@example.com')
+
+    # --- removal is deactivation ---------------------------------------
+
+    def test_delete_deactivates_and_keeps_the_row(self):
+        response = self.client.delete(self.member_url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        self.member.refresh_from_db()   # would raise if the row were gone
+        self.assertFalse(self.member.is_active)
+
+    def test_deactivated_user_cannot_log_in(self):
+        self.client.delete(self.member_url)
+
+        response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': 'cook', 'password': 'n0t-a-real-password'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_deactivation_revokes_existing_sessions(self):
+        token = RefreshToken.for_user(self.member)
+
+        self.client.delete(self.member_url)
+
+        response = self.client.post(
+            reverse('token_refresh'), {'refresh': str(token)}
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_deactivation_is_reversible(self):
+        self.client.delete(self.member_url)
+        self.client.patch(self.member_url, {'is_active': True})
+
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_active)
+
+    def test_admin_cannot_delete_themselves(self):
+        response = self.client.delete(self.own_url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    # --- search, filter, sort ------------------------------------------
+
+    def test_search_by_username(self):
+        response = self.client.get(self.list_url, {'search': 'cook'})
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['username'], 'cook')
+
+    def test_filter_by_role(self):
+        response = self.client.get(self.list_url, {'role': User.Role.ADMIN})
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['username'], 'boss')
+
+    def test_filter_by_active_state(self):
+        self.client.delete(self.member_url)
+
+        response = self.client.get(self.list_url, {'is_active': 'false'})
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['username'], 'cook')
+
+    def test_ordering(self):
+        response = self.client.get(self.list_url, {'ordering': '-username'})
+        names = [row['username'] for row in response.data['results']]
+        self.assertEqual(names, ['cook', 'boss'])
+
+
 class NoStrayDrfAdminPermissionTests(SimpleTestCase):
     """Guard against DRF's IsAdminUser being used as our admin check.
 

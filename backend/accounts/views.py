@@ -6,7 +6,7 @@ lives here rather than at SimpleJWT's /api/token/blacklist/ so the three
 account actions the frontend needs sit under one prefix.
 """
 
-from rest_framework import generics, status
+from rest_framework import generics, mixins, status, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -19,8 +19,10 @@ from rest_framework_simplejwt.token_blacklist.models import (
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .permissions import IsRegisteredUser
+from .models import User
+from .permissions import IsAdmin, IsRegisteredUser
 from .serializers import (
+    AdminUserSerializer,
     PasswordChangeSerializer,
     RegisterSerializer,
     UserSerializer,
@@ -134,3 +136,78 @@ class PasswordChangeView(APIView):
             BlacklistedToken.objects.get_or_create(token=token)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminUserViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Admin-only account management under /api/accounts/users/.
+
+        GET    /users/          list, searchable and filterable
+        GET    /users/<id>/     one account
+        PATCH  /users/<id>/     change role or is_active
+        DELETE /users/<id>/     deactivate (see below)
+
+    There is deliberately no POST: accounts are created by signing up, so an
+    admin cannot mint one with a password only they know.
+
+    DELETE deactivates rather than destroys. Hard-deleting a user would take
+    their recipes, ratings and comments with it, turning a moderation call
+    into content loss that cannot be undone - so the row stays and is_active
+    goes False. Reverse it with PATCH {"is_active": true}.
+    """
+
+    serializer_class = AdminUserSerializer
+    permission_classes = [IsAdmin]
+
+    # Ordered so pagination is stable; an unordered queryset can repeat or
+    # skip rows between pages.
+    queryset = User.objects.all().order_by('username')
+
+    filterset_fields = ['role', 'is_active']
+    search_fields = ['username', 'email']
+    ordering_fields = ['username', 'created_at', 'role']
+
+    def _refuse_self_lockout(self, target, role, is_active):
+        """Stop an admin removing their own access.
+
+        Without this an admin can demote or deactivate themselves and lose
+        the ability to undo it - and if they are the only admin, nobody can.
+        Superusers keep admin rights regardless of role, so the check asks
+        what the account would look like after the change rather than
+        comparing the role alone.
+        """
+        if target != self.request.user:
+            return
+
+        would_be_admin = target.is_superuser or role == User.Role.ADMIN
+        if not would_be_admin or not is_active:
+            raise ValidationError(
+                'You cannot remove your own admin access. Ask another admin '
+                'to do it for you.'
+            )
+
+    def perform_update(self, serializer):
+        target = serializer.instance
+        self._refuse_self_lockout(
+            target,
+            serializer.validated_data.get('role', target.role),
+            serializer.validated_data.get('is_active', target.is_active),
+        )
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._refuse_self_lockout(instance, instance.role, False)
+
+        instance.is_active = False
+        instance.save(update_fields=['is_active'])
+
+        # Deactivation has to end the session too. Without this the account
+        # keeps refreshing its way to new access tokens and stays usable
+        # despite being switched off.
+        for token in OutstandingToken.objects.filter(user=instance):
+            BlacklistedToken.objects.get_or_create(token=token)
