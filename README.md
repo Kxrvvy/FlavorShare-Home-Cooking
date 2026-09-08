@@ -148,10 +148,19 @@ http://127.0.0.1:8000/admin/.
 
 ## Running the tests
 
+**Run these from inside `backend/`**, not from the project root:
+
 ```bash
-python backend/manage.py test              # everything
-python backend/manage.py test accounts     # one app
+cd backend
+python manage.py test              # everything
+python manage.py test accounts     # one app
 ```
+
+Test discovery starts from the current directory, so `python
+backend/manage.py test` from the project root finds **zero** tests and still
+prints `OK` — a silent false pass. Naming an app
+(`python backend/manage.py test accounts`) works from anywhere; only the
+bare form needs the `cd`.
 
 Tests build and drop their own `test_flavorshare_db`; your real data is never
 touched. If this fails with a permissions error, revisit the second `GRANT`
