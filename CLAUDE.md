@@ -147,7 +147,7 @@ correct and complete as of the last review.
 | **Recipe** | recipe_id (PK), user_id (FK), title, description, cuisine_type, prep_time, cook_time, servings, difficulty, status (draft/published), view_count, created_at, updated_at |
 | **Ingredient** | ingredient_id (PK), name, category |
 | **Step** | step_id (PK), recipe_id (FK), step_number, instruction |
-| **Image** | image_id (PK), recipe_id (FK), uploaded_by (FK → User), url, type (ingredient/step/final) |
+| **Image** | image_id (PK), recipe_id (FK), step_id (FK → Step, nullable), uploaded_by (FK → User), url, type (ingredient/step/final) |
 | **Rating** | rating_id (PK), recipe_id (FK), user_id (FK), score (1–5), created_at |
 | **Comment** | comment_id (PK), recipe_id (FK), user_id (FK), content, created_at |
 | **Tag** | tag_id (PK), name (e.g., "vegan", "gluten-free", "Italian") |
@@ -172,6 +172,11 @@ correct and complete as of the last review.
 - `Image` is a **model inside the `recipes` app**, not its own separate
   Django app (it only exists in service of a recipe, so it doesn't meet
   the bar for being its own feature/app).
+- `Image.step_id` is **nullable on purpose**: the recipe builder gives each
+  step its own optional photo, so a step image points at its step, while
+  cover (`final`) and `ingredient` images belong to the recipe as a whole
+  and leave it null. Added after the original ERD — **the diagram needs
+  redrawing to match.**
 - **Framework tables:** Django and SimpleJWT create their own tables in
   `flavorshare_db` (sessions, migrations, content types, permissions,
   admin log, token blacklist), so the live database holds more tables
