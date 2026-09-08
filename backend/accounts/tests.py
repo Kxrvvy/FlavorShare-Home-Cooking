@@ -302,6 +302,152 @@ class LogoutTests(APITestCase):
         )
 
 
+class ProfileUpdateTests(APITestCase):
+    """GET / PATCH /api/accounts/me/."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+        )
+        cls.other = User.objects.create_user(
+            username='taken',
+            email='taken@example.com',
+            password='n0t-a-real-password',
+        )
+
+    def setUp(self):
+        self.client.force_authenticate(user=self.user)
+        self.url = reverse('me')
+
+    def test_returns_own_profile(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['username'], 'cook')
+
+    def test_can_edit_profile_fields(self):
+        response = self.client.patch(
+            self.url,
+            {'email': 'new@example.com', 'dietary_preferences': 'vegan'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, 'new@example.com')
+        self.assertEqual(self.user.dietary_preferences, 'vegan')
+
+    def test_cannot_promote_self_to_admin(self):
+        """`role` is read-only - PATCHing it must be ignored, not applied."""
+        response = self.client.patch(self.url, {'role': User.Role.ADMIN})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.role, User.Role.REGISTERED)
+        self.assertFalse(self.user.is_admin)
+
+    def test_duplicate_username_is_rejected(self):
+        response = self.client.patch(self.url, {'username': 'taken'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_keeping_own_username_is_allowed(self):
+        """The uniqueness check must exclude the row being edited."""
+        response = self.client.patch(
+            self.url, {'username': 'cook', 'dietary_preferences': 'halal'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        self.assertEqual(
+            self.client.get(self.url).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+
+class PasswordChangeTests(APITestCase):
+    """POST /api/accounts/password/."""
+
+    CURRENT = 'n0t-a-real-password'
+    NEW = 'an0ther-real-looking-pw'
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password=self.CURRENT,
+        )
+        self.client.force_authenticate(user=self.user)
+        self.url = reverse('password-change')
+
+    def test_changes_the_password(self):
+        response = self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': self.NEW},
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(self.NEW))
+        self.assertFalse(self.user.check_password(self.CURRENT))
+
+    def test_password_is_hashed_not_stored_raw(self):
+        self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': self.NEW},
+        )
+        self.user.refresh_from_db()
+        self.assertNotEqual(self.user.password, self.NEW)
+        self.assertTrue(self.user.password.startswith('pbkdf2_'))
+
+    def test_wrong_current_password_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {'current_password': 'wrong-password', 'new_password': self.NEW},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(self.CURRENT))
+
+    def test_weak_new_password_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': '123'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_reusing_the_current_password_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': self.CURRENT},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_existing_sessions_are_revoked(self):
+        """A password change must not leave old refresh tokens usable."""
+        token = RefreshToken.for_user(self.user)
+
+        self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': self.NEW},
+        )
+
+        response = self.client.post(
+            reverse('token_refresh'), {'refresh': str(token)}
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': self.NEW},
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class NoStrayDrfAdminPermissionTests(SimpleTestCase):
     """Guard against DRF's IsAdminUser being used as our admin check.
 

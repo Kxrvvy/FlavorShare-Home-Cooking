@@ -8,15 +8,23 @@ account actions the frontend needs sit under one prefix.
 
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .permissions import IsRegisteredUser
-from .serializers import RegisterSerializer, UserSerializer
+from .serializers import (
+    PasswordChangeSerializer,
+    RegisterSerializer,
+    UserSerializer,
+)
 
 
 class RegisterView(generics.CreateAPIView): # Create = POST
@@ -83,11 +91,46 @@ class LogoutView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class MeView(generics.RetrieveAPIView): # Retrieve = GET
-    """GET /api/accounts/me/ - the authenticated user's own profile."""
+class MeView(generics.RetrieveUpdateAPIView): # Retrieve = GET, Update = PUT/PATCH
+    """GET / PUT / PATCH /api/accounts/me/ - the caller's own profile.
+
+    Editable: username, email, dietary_preferences. `role` stays read-only on
+    the serializer, so a user cannot promote itself by PATCHing this endpoint.
+
+    PATCH is the one to use from the frontend; PUT is accepted but requires
+    every writable field in the body.
+    """
 
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsRegisteredUser]
 
     def get_object(self):
         return self.request.user
+
+
+class PasswordChangeView(APIView):
+    """POST /api/accounts/password/ - change your own password.
+
+    Requires the current password, and revokes every refresh token the account
+    holds, so a session opened with the old password cannot be extended. Access
+    tokens already issued stay valid until they expire - see LogoutView.
+    """
+
+    permission_classes = [IsRegisteredUser]
+
+    def post(self, request):
+        serializer = PasswordChangeSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        # Changing a password should end other sessions. Blacklisting every
+        # outstanding refresh token is what makes that true - without it, a
+        # stolen refresh token survives the password change that was meant to
+        # shut it out.
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

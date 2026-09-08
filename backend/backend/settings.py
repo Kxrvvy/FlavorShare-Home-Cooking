@@ -19,7 +19,8 @@ import environ
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Read configuration from environment variables, falling back to the defaults
-# below so a fresh clone runs without a .env file. See .env.example.
+# below so a fresh clone runs without a .env file. No .env of any kind is
+# committed - README.md lists the keys and what each one does.
 env = environ.Env(
     DEBUG=(bool, True),
     ALLOWED_HOSTS=(list, ['localhost', '127.0.0.1']),
@@ -37,6 +38,25 @@ SECRET_KEY = env(
 DEBUG = env('DEBUG')
 
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
+
+# Production hardening. Everything here is scoped to DEBUG=False so local
+# development is unaffected - none of it works over plain http, and turning
+# it on locally just makes the dev server unreachable.
+if not DEBUG:
+    # Render terminates TLS at its proxy and forwards over http, so Django
+    # only learns the original request was https from this header. Without
+    # it, SECURE_SSL_REDIRECT sees http and redirects forever.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    # Start at one hour. Raise it once the deployment is known good - HSTS is
+    # hard to walk back, since browsers cache the instruction for its full
+    # duration and will refuse http for that long.
+    SECURE_HSTS_SECONDS = 3600
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 
 # Application definition
