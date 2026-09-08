@@ -12,7 +12,10 @@ from types import SimpleNamespace
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, TestCase
-from rest_framework.test import APIRequestFactory
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APIRequestFactory, APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
 from .permissions import (
@@ -211,6 +214,92 @@ class IsAdminPropertyTests(PermissionTestCase):
     def test_is_staff_follows_is_admin(self):
         self.assertTrue(self.admin.is_staff)
         self.assertFalse(self.registered.is_staff)
+
+
+class LogoutTests(APITestCase):
+    """POST /api/accounts/logout/ and the refresh-rotation rules behind it."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+        )
+        cls.other = User.objects.create_user(
+            username='someone-else',
+            email='else@example.com',
+            password='n0t-a-real-password',
+        )
+
+    def logout(self, data):
+        return self.client.post(reverse('logout'), data)
+
+    def refresh(self, token):
+        return self.client.post(reverse('token_refresh'), {'refresh': str(token)})
+
+    def test_logout_revokes_the_refresh_token(self):
+        token = RefreshToken.for_user(self.user)
+        self.client.force_authenticate(user=self.user)
+
+        response = self.logout({'refresh': str(token)})
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        # The point of the endpoint: the token no longer buys a new session.
+        self.assertEqual(
+            self.refresh(token).status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+    def test_rotated_refresh_token_stops_working(self):
+        """BLACKLIST_AFTER_ROTATION - without it the old token stays valid."""
+        token = RefreshToken.for_user(self.user)
+
+        self.assertEqual(self.refresh(token).status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            self.refresh(token).status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+    def test_logout_requires_authentication(self):
+        token = RefreshToken.for_user(self.user)
+        self.assertEqual(
+            self.logout({'refresh': str(token)}).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_logout_requires_a_refresh_token(self):
+        self.client.force_authenticate(user=self.user)
+        self.assertEqual(
+            self.logout({}).status_code, status.HTTP_400_BAD_REQUEST
+        )
+
+    def test_garbage_token_is_rejected(self):
+        self.client.force_authenticate(user=self.user)
+        self.assertEqual(
+            self.logout({'refresh': 'not-a-token'}).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_cannot_revoke_another_users_token(self):
+        token = RefreshToken.for_user(self.other)
+        self.client.force_authenticate(user=self.user)
+
+        self.assertEqual(
+            self.logout({'refresh': str(token)}).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        # The other user's session must survive the attempt.
+        self.assertEqual(self.refresh(token).status_code, status.HTTP_200_OK)
+
+    def test_logging_out_twice_is_rejected_cleanly(self):
+        """An already-blacklisted token must 400, not raise."""
+        token = RefreshToken.for_user(self.user)
+        self.client.force_authenticate(user=self.user)
+
+        self.logout({'refresh': str(token)})
+        self.assertEqual(
+            self.logout({'refresh': str(token)}).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class NoStrayDrfAdminPermissionTests(SimpleTestCase):

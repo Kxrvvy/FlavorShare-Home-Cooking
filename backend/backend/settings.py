@@ -51,6 +51,9 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'rest_framework_simplejwt',
+    # Stores issued refresh tokens so logout and rotation can revoke them.
+    # Adds two tables; they are framework infrastructure, not part of the ERD.
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
 
@@ -192,9 +195,18 @@ SIMPLE_JWT = {
     'USER_ID_FIELD': 'user_id',
     'USER_ID_CLAIM': 'user_id',
 
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    # Kept short on purpose. Logout revokes the refresh token, but an access
+    # token stays valid until it expires - nothing can recall one already
+    # issued - so this window is how long a "logged out" token still works.
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+
+    # Each refresh issues a new refresh token and blacklists the one used, so
+    # a stolen token stops working as soon as the real user refreshes.
+    # Rotation without blacklisting would leave the old token valid.
     'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+
     'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
