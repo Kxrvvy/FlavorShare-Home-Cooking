@@ -353,7 +353,12 @@ class RecipeWriteSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
-        """Rule 2 from the module docstring: the publish gate."""
+        """Rule 2 from the module docstring: the publish gate.
+
+        The rule itself is Recipe.publication_error(), so RecipeAdminForm
+        enforces the same one. What stays here is the transition: whether
+        this request is actually a move into `published`.
+        """
         status = attrs.get(
             'status',
             getattr(self.instance, 'status', Recipe.Status.DRAFT),
@@ -362,34 +367,17 @@ class RecipeWriteSerializer(serializers.ModelSerializer):
         if status != Recipe.Status.PUBLISHED:
             return attrs
 
-        # Writes are flat, so a recipe being created has no steps or
-        # ingredients yet and could never satisfy the gate. Say so plainly
-        # rather than reporting it as missing content the client never had a
-        # chance to add.
-        if self.instance is None:
-            raise serializers.ValidationError({
-                'status': (
-                    'A new recipe is saved as a draft. Add its ingredients '
-                    'and steps first, then publish it.'
-                ),
-            })
-
         # Re-saving something already published is a no-op, not an error.
-        if self.instance.status == Recipe.Status.PUBLISHED:
-            return attrs
+        if self.instance is not None:
+            if self.instance.status == Recipe.Status.PUBLISHED:
+                return attrs
 
-        missing = []
-        if not self.instance.recipe_ingredients.exists():
-            missing.append('ingredients')
-        if not self.instance.steps.exists():
-            missing.append('steps')
+        # Writes are flat, so a recipe being created has no steps or
+        # ingredients yet. An unsaved Recipe() answers for that case, which
+        # keeps the create path and the update path on one rule.
+        error = (self.instance or Recipe()).publication_error()
 
-        if missing:
-            raise serializers.ValidationError({
-                'status': (
-                    f'A recipe needs {" and ".join(missing)} before it can '
-                    f'be published.'
-                ),
-            })
+        if error:
+            raise serializers.ValidationError({'status': error})
 
         return attrs

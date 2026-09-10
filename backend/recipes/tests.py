@@ -342,6 +342,192 @@ class IngredientSerializerTests(RecipeTestCase):
         self.assertIn('name', serializer.errors)
 
 
+class PublicationGateTests(RecipeTestCase):
+    """Recipe.publication_error() - the rule both callers share."""
+
+    def _add_ingredient(self, recipe):
+        RecipeIngredient.objects.create(
+            recipe=recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+
+    def _add_step(self, recipe):
+        Step.objects.create(
+            recipe=recipe, step_number=1, instruction='Boil.'
+        )
+
+    def test_an_unsaved_recipe_is_refused_without_touching_the_database(self):
+        """The pk guard. Reverse managers raise ValueError on an unsaved row.
+
+        This is the shared landmine behind both create paths - a POST of a
+        brand new recipe and the admin's add page.
+        """
+        error = Recipe().publication_error()
+
+        self.assertIsNotNone(error)
+        self.assertIn('saved as a draft', error)
+
+    def test_an_empty_recipe_names_both_things(self):
+        error = self.recipe.publication_error()
+
+        self.assertIn('ingredients', error)
+        self.assertIn('steps', error)
+
+    def test_only_steps_names_the_ingredients(self):
+        self._add_step(self.recipe)
+        error = self.recipe.publication_error()
+
+        self.assertIn('ingredients', error)
+        self.assertNotIn('steps', error)
+
+    def test_only_ingredients_names_the_steps(self):
+        self._add_ingredient(self.recipe)
+        error = self.recipe.publication_error()
+
+        self.assertIn('steps', error)
+        self.assertNotIn('ingredients', error)
+
+    def test_a_complete_recipe_has_no_error(self):
+        self._add_step(self.recipe)
+        self._add_ingredient(self.recipe)
+
+        self.assertIsNone(self.recipe.publication_error())
+
+    def test_can_be_published_agrees(self):
+        self.assertFalse(self.recipe.can_be_published())
+        self.assertFalse(Recipe().can_be_published())
+
+        self._add_step(self.recipe)
+        self._add_ingredient(self.recipe)
+        self.assertTrue(self.recipe.can_be_published())
+
+
+class RecipeAdminPublishGateTests(TestCase):
+    """The same gate, through the admin's status dropdown."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create_user(
+            username='boss',
+            email='boss@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+        cls.recipe = Recipe.objects.create(user=cls.admin, title='Adobo')
+
+    def setUp(self):
+        self.client.force_login(self.admin)
+
+    def _form_data(self, status=Recipe.Status.PUBLISHED, **overrides):
+        data = {
+            'title': 'Adobo',
+            'user': str(self.admin.pk),
+            'description': '',
+            'cuisine_type': '',
+            'prep_time': '',
+            'cook_time': '',
+            'servings': '',
+            'difficulty': '',
+            'status': status,
+            'steps-TOTAL_FORMS': '0',
+            'steps-INITIAL_FORMS': '0',
+            'steps-MIN_NUM_FORMS': '0',
+            'steps-MAX_NUM_FORMS': '1000',
+            'recipe_ingredients-TOTAL_FORMS': '0',
+            'recipe_ingredients-INITIAL_FORMS': '0',
+            'recipe_ingredients-MIN_NUM_FORMS': '0',
+            'recipe_ingredients-MAX_NUM_FORMS': '1000',
+            'images-TOTAL_FORMS': '0',
+            'images-INITIAL_FORMS': '0',
+            'images-MIN_NUM_FORMS': '0',
+            'images-MAX_NUM_FORMS': '1000',
+        }
+        data.update(overrides)
+        return data
+
+    def _post_change(self, **overrides):
+        return self.client.post(
+            reverse('admin:recipes_recipe_change', args=[self.recipe.pk]),
+            self._form_data(**overrides),
+        )
+
+    def _fill_in(self):
+        Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+        RecipeIngredient.objects.create(
+            recipe=self.recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+
+    def test_publishing_an_empty_recipe_is_refused(self):
+        response = self._post_change()
+
+        self.assertEqual(response.status_code, 200)
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.recipe.status, Recipe.Status.DRAFT)
+        self.assertContains(response, 'before it can be published')
+
+    def test_publishing_a_complete_recipe_works(self):
+        self._fill_in()
+        response = self._post_change()
+
+        self.assertEqual(response.status_code, 302)
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.recipe.status, Recipe.Status.PUBLISHED)
+
+    def test_saving_as_a_draft_is_never_gated(self):
+        response = self._post_change(status=Recipe.Status.DRAFT)
+
+        self.assertEqual(response.status_code, 302)
+
+    def test_resaving_an_already_published_recipe_is_allowed(self):
+        """The gate guards the transition, not every later edit."""
+        Recipe.objects.filter(pk=self.recipe.pk).update(
+            status=Recipe.Status.PUBLISHED
+        )
+
+        response = self._post_change()
+        self.assertEqual(response.status_code, 302)
+
+    def test_the_add_page_cannot_publish_outright(self):
+        """The other half of the pk guard, through the admin this time."""
+        response = self.client.post(
+            reverse('admin:recipes_recipe_add'),
+            self._form_data(title='Brand new'),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'saved as a draft')
+        self.assertFalse(Recipe.objects.filter(title='Brand new').exists())
+
+    def test_adding_the_first_step_and_publishing_at_once_is_refused(self):
+        """KNOWN LIMITATION, asserted so it cannot be fixed silently.
+
+        Inline rows save after the parent form is validated, so a submission
+        that adds the first step *and* flips to Published is refused - the
+        step does not exist yet when clean_status() looks. This is documented
+        in RecipeAdminForm's help_text for `status`.
+
+        If this test ever fails, the limitation is gone: delete the test and
+        the help_text sentence that warns about it.
+        """
+        RecipeIngredient.objects.create(
+            recipe=self.recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+
+        response = self._post_change(**{
+            'steps-TOTAL_FORMS': '1',
+            'steps-0-step_number': '1',
+            'steps-0-instruction': 'Boil.',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.recipe.refresh_from_db()
+        self.assertEqual(self.recipe.status, Recipe.Status.DRAFT)
+
+
 class ImageCleanTests(RecipeTestCase):
     """Image.clean() - the one place the step/recipe rules are written.
 
