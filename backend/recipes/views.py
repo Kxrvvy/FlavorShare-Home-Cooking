@@ -14,16 +14,21 @@ no object yet - so nothing would stop a signed-in user adding a step to
 someone else's recipe. RecipeChildViewSet.perform_create closes that.
 """
 
+import cloudinary.uploader
+from cloudinary.exceptions import Error as CloudinaryError
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Case, F, IntegerField, Max, Q, When
-from rest_framework import viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from accounts.permissions import (
     IsAdmin,
     IsOwnerOrReadOnly,
+    IsRegisteredUser,
     IsRegisteredUserOrReadOnly,
 )
 
@@ -305,12 +310,107 @@ class RecipeIngredientViewSet(RecipeChildViewSet):
 class ImageViewSet(RecipeChildViewSet):
     """/api/recipes/images/ - recipe and step photos.
 
-    Takes a `url` that is already hosted. Uploading the file itself, and
-    getting that URL back from Cloudinary, is the next piece of work.
+    Attaching a photo takes two calls:
+
+        POST /api/recipes/images/upload/   the file -> a hosted URL
+        POST /api/recipes/images/          that URL -> an Image row
+
+    Two steps rather than one so this viewset keeps taking a plain `url` and
+    the frontend can show a preview before committing the row. The cost is
+    that a file uploaded and never attached stays on Cloudinary unreferenced;
+    nothing collects those, which is a fair trade at this size.
     """
 
     model = Image
     serializer_class = ImageSerializer
+
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='upload',
+        permission_classes=[IsRegisteredUser],
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload(self, request):
+        """Send one image to Cloudinary and hand back its URL.
+
+        Expects multipart with a `file` field; answers 201 with `url` and
+        `public_id`. The URL goes into Image.url on the follow-up POST.
+
+        The API secret is read here and never leaves the server - that is the
+        reason this endpoint exists at all rather than the browser talking to
+        Cloudinary directly.
+        """
+        config = settings.CLOUDINARY_STORAGE
+
+        # Checked first: without credentials every other outcome would be an
+        # SDK exception, and a teammate who cloned without a .env deserves to
+        # be told that rather than shown a traceback.
+        if not config.get('CLOUD_NAME'):
+            return Response(
+                {
+                    'detail': (
+                        'Image uploads are not configured on this server. '
+                        'Set the CLOUDINARY_* environment variables - see '
+                        'README.md.'
+                    ),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        upload = request.FILES.get('file')
+        if upload is None:
+            raise ValidationError({'file': 'Attach a file to upload.'})
+
+        # Before the file is sent anywhere, so an oversized upload costs one
+        # request instead of the bandwidth to forward it.
+        if upload.size > settings.MAX_IMAGE_UPLOAD_BYTES:
+            limit = settings.MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)
+            raise ValidationError({
+                'file': f'Images must be smaller than {limit} MB.',
+            })
+
+        # Caught here rather than by resource_type='image' below: Cloudinary
+        # refusing a PDF comes back as a CloudinaryError, and reporting that
+        # as a 502 would blame the server for the caller's mistake.
+        #
+        # This trusts the browser's Content-Type, which a determined client
+        # can lie about. That is fine - it decides which status code an
+        # honest mistake gets, and Cloudinary still rejects a file that is
+        # not really an image.
+        if not (upload.content_type or '').startswith('image/'):
+            raise ValidationError({
+                'file': 'That file is not an image.',
+            })
+
+        try:
+            result = cloudinary.uploader.upload(
+                upload,
+                resource_type='image',
+                folder='flavorshare/recipes',
+                # Passed per call rather than configuring the SDK globally, so
+                # the credentials come from settings every time and tests can
+                # override them.
+                cloud_name=config['CLOUD_NAME'],
+                api_key=config['API_KEY'],
+                api_secret=config['API_SECRET'],
+            )
+        except CloudinaryError as exc:
+            # Their outage, not the caller's mistake - so 502 rather than 400.
+            return Response(
+                {'detail': f'Cloudinary rejected the upload: {exc}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                # secure_url, never `url`: the plain one is http and would be
+                # blocked as mixed content on an https frontend.
+                'url': result['secure_url'],
+                'public_id': result['public_id'],
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     def get_queryset(self):
         return super().get_queryset().select_related('uploaded_by')

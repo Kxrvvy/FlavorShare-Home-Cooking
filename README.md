@@ -99,6 +99,15 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | `DEBUG` | no | `True` | `True` locally, `False` in production. |
 | `ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | Comma-separated. Add your Render hostname once deployed. |
 | `CORS_ALLOWED_ORIGINS` | no | `http://localhost:3000,http://127.0.0.1:3000` | Origins allowed to call this API. Add the Vercel URL once the frontend ships. |
+| `CLOUDINARY_CLOUD_NAME` | for uploads | `dxxxxxxxx` | Cloudinary account to upload recipe photos to. |
+| `CLOUDINARY_API_KEY` | for uploads | `123456789012345` | Public half of the Cloudinary credentials. |
+| `CLOUDINARY_API_SECRET` | for uploads | *from your dashboard* | Secret half. Server-side only — never put this in the frontend. |
+
+The three `CLOUDINARY_*` keys are needed only for image uploads. Leave them
+out and everything else runs; `POST /api/recipes/images/upload/` answers
+`503` with a message saying they are missing. Find all three on the Cloudinary
+dashboard at <https://console.cloudinary.com> under **Account Details** — the
+free tier is enough for this project.
 
 Generate your own `SECRET_KEY`:
 
@@ -111,6 +120,11 @@ So a minimal `backend/.env` looks like:
 ```ini
 DATABASE_URL=mysql://flavorshare:your-password@127.0.0.1:3306/flavorshare_db
 SECRET_KEY=paste-your-generated-key-here
+
+# Only needed if you are working on image uploads
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
 ```
 
 The three optional keys have working defaults in `settings.py`; set them only

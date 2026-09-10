@@ -9,14 +9,20 @@ recipe that has no content yet.
 
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from cloudinary.exceptions import Error as CloudinaryError
+from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 from .admin import ImageAdmin, ImageInline
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
@@ -340,6 +346,138 @@ class IngredientSerializerTests(RecipeTestCase):
         serializer = IngredientSerializer(data={'name': '   '})
         self.assertFalse(serializer.is_valid())
         self.assertIn('name', serializer.errors)
+
+
+class ImageUploadTests(APITestCase):
+    """POST /api/recipes/images/upload/ - the file's trip to Cloudinary.
+
+    cloudinary.uploader.upload is mocked throughout: the suite must not make
+    network calls, and it has to pass on a checkout with no credentials. The
+    mock is asserted against, so an endpoint that quietly stopped uploading
+    would fail here rather than look green.
+    """
+
+    URL = '/api/recipes/images/upload/'
+
+    CREDENTIALS = {
+        'CLOUD_NAME': 'test-cloud',
+        'API_KEY': 'test-key',
+        'API_SECRET': 'test-secret',
+    }
+
+    RESPONSE = {
+        'secure_url': 'https://res.cloudinary.com/test-cloud/image/upload/a.jpg',
+        'url': 'http://res.cloudinary.com/test-cloud/image/upload/a.jpg',
+        'public_id': 'a',
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+        )
+
+    def _file(self, name='photo.jpg', content=b'not-really-a-jpeg'):
+        return SimpleUploadedFile(name, content, content_type='image/jpeg')
+
+    def _post(self, **kwargs):
+        with override_settings(CLOUDINARY_STORAGE=self.CREDENTIALS):
+            return self.client.post(self.URL, kwargs, format='multipart')
+
+    def test_a_signed_in_user_can_upload(self):
+        self.client.force_authenticate(self.user)
+
+        with patch('cloudinary.uploader.upload', return_value=self.RESPONSE) as up:
+            response = self._post(file=self._file())
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['url'], self.RESPONSE['secure_url'])
+        self.assertEqual(response.data['public_id'], 'a')
+
+        # The endpoint really called out, rather than inventing a URL.
+        up.assert_called_once()
+
+    def test_the_https_url_is_returned_not_the_plain_one(self):
+        self.client.force_authenticate(self.user)
+
+        with patch('cloudinary.uploader.upload', return_value=self.RESPONSE):
+            response = self._post(file=self._file())
+
+        self.assertTrue(response.data['url'].startswith('https://'))
+
+    def test_an_anonymous_caller_is_refused(self):
+        with patch('cloudinary.uploader.upload') as up:
+            response = self._post(file=self._file())
+
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
+        up.assert_not_called()
+
+    def test_a_missing_file_is_a_400(self):
+        self.client.force_authenticate(self.user)
+
+        with patch('cloudinary.uploader.upload') as up:
+            response = self._post()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('file', response.data)
+        up.assert_not_called()
+
+    def test_an_oversized_file_is_refused_before_it_is_sent(self):
+        """The size check has to come first, or a huge upload costs bandwidth."""
+        self.client.force_authenticate(self.user)
+        oversized = self._file(
+            content=b'x' * (settings.MAX_IMAGE_UPLOAD_BYTES + 1)
+        )
+
+        with patch('cloudinary.uploader.upload') as up:
+            response = self._post(file=oversized)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        up.assert_not_called()
+
+    def test_a_non_image_is_a_400_not_a_502(self):
+        """The caller's mistake, so it must not be reported as an outage."""
+        self.client.force_authenticate(self.user)
+        not_an_image = SimpleUploadedFile(
+            'notes.pdf', b'%PDF-1.4', content_type='application/pdf'
+        )
+
+        with patch('cloudinary.uploader.upload') as up:
+            response = self._post(file=not_an_image)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('file', response.data)
+        up.assert_not_called()
+
+    def test_missing_credentials_answer_503_not_a_traceback(self):
+        """A clone with no .env should be told what is wrong."""
+        self.client.force_authenticate(self.user)
+
+        with override_settings(CLOUDINARY_STORAGE={'CLOUD_NAME': ''}):
+            with patch('cloudinary.uploader.upload') as up:
+                response = self.client.post(
+                    self.URL, {'file': self._file()}, format='multipart'
+                )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+        up.assert_not_called()
+
+    def test_an_upload_failure_is_reported_as_a_502(self):
+        self.client.force_authenticate(self.user)
+
+        with patch(
+            'cloudinary.uploader.upload', side_effect=CloudinaryError('nope')
+        ):
+            response = self._post(file=self._file())
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
 
 
 class PublicationGateTests(RecipeTestCase):
