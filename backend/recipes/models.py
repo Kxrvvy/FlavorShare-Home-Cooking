@@ -137,6 +137,51 @@ class Recipe(models.Model):
     def __str__(self):
         return self.title
 
+    def publication_error(self):
+        """Why this recipe may not be published yet, or None if it may.
+
+        The publish rule kept out of the database on purpose - a draft has to
+        be saveable while it is still half built, so "needs ingredients and
+        steps" cannot be a NOT NULL constraint. It lives here rather than in
+        RecipeWriteSerializer because the Django admin does not go through
+        DRF, and a rule written in only one of those two places is a rule the
+        other one quietly ignores.
+
+        Returns the message rather than a bool because both callers show it
+        to somebody; can_be_published() is the predicate built on top.
+
+        Answers only "does this recipe have what it needs". Whether a given
+        status change is even a transition - re-saving something already
+        published is a no-op, not a failure - belongs to the caller making
+        the change.
+        """
+        # Reverse managers raise ValueError on an unsaved row, so this guard
+        # has to come first. Both entry points reach it: POST of a brand new
+        # recipe, and the admin's add page.
+        if self.pk is None:
+            return (
+                'A new recipe is saved as a draft. Add its ingredients '
+                'and steps first, then publish it.'
+            )
+
+        missing = []
+        if not self.recipe_ingredients.exists():
+            missing.append('ingredients')
+        if not self.steps.exists():
+            missing.append('steps')
+
+        if not missing:
+            return None
+
+        return (
+            f'A recipe needs {" and ".join(missing)} before it can '
+            f'be published.'
+        )
+
+    def can_be_published(self):
+        """Whether publishing this recipe would be accepted."""
+        return self.publication_error() is None
+
 
 class Step(models.Model):
     """SQL: Step"""

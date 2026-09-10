@@ -12,9 +12,51 @@ helps nobody. Images are registered both ways, because moderating a bad photo
 starts from the photo, not from the recipe it happens to sit in.
 """
 
+from django import forms
 from django.contrib import admin
 
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
+
+
+class RecipeAdminForm(forms.ModelForm):
+    """Applies the publish gate to the admin's status dropdown.
+
+    The rule is Recipe.publication_error(); this only decides whether the
+    submission is a move into `published` and where to show the message.
+
+    On clean_status(), self.instance is still the row as it exists in the
+    database - construct_instance() does not run until _post_clean() - so
+    self.instance.status is the *old* status and its reverse managers see the
+    children that are actually saved. Both are what the gate needs.
+    """
+
+    class Meta:
+        model = Recipe
+        fields = '__all__'
+        help_texts = {
+            'status': (
+                'Publishing requires the recipe to have ingredients and '
+                'steps. If you added the first step or ingredient in this '
+                'same submission, save once first, then publish - inline '
+                'rows are saved after this form is checked.'
+            ),
+        }
+
+    def clean_status(self):
+        status = self.cleaned_data['status']
+
+        if status != Recipe.Status.PUBLISHED:
+            return status
+
+        # Re-saving something already published is a no-op, not an error.
+        if self.instance.pk and self.instance.status == Recipe.Status.PUBLISHED:
+            return status
+
+        error = self.instance.publication_error()
+        if error:
+            raise forms.ValidationError(error)
+
+        return status
 
 
 class StepInline(admin.TabularInline):
@@ -75,6 +117,8 @@ class ImageInline(admin.TabularInline):
 class RecipeAdmin(admin.ModelAdmin):
     """Admin for recipes.Recipe, with its content edited inline."""
 
+    form = RecipeAdminForm
+
     list_display = (
         'title',
         'user',
@@ -119,12 +163,9 @@ class RecipeAdmin(admin.ModelAdmin):
             'Publishing',
             {
                 'fields': ('status', 'view_count'),
-                # Saying so here because this form is the one way to publish
-                # that skips RecipeWriteSerializer's gate.
                 'description': (
-                    'Publishing through the API requires the recipe to have '
-                    'ingredients and steps. This form does not enforce that, '
-                    'so check the tabs below before switching to Published.'
+                    'The publish gate applies here as well as through the '
+                    'API - see the note on the status field.'
                 ),
             },
         ),
