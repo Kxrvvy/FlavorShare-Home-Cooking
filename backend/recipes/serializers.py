@@ -18,8 +18,13 @@ to check.
 """
 
 from django.contrib.auth import get_user_model
+# Aliased on purpose. Django's ValidationError and DRF's share a name but are
+# not interchangeable: raising Django's from a serializer produces a 500, not
+# a 400. The alias makes every use site say which one it means.
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Max
 from rest_framework import serializers
+from rest_framework.serializers import as_serializer_error
 
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 
@@ -106,29 +111,21 @@ class ImageSerializer(serializers.ModelSerializer):
         step = attrs.get('step', getattr(self.instance, 'step', None))
         image_type = attrs.get('type', getattr(self.instance, 'type', None))
 
-        # Rule 1 from the module docstring. Without this an image can point at
-        # a step from an entirely different recipe and nothing notices.
-        if step is not None and recipe is not None:
-            if step.recipe_id != recipe.pk:
-                raise serializers.ValidationError({
-                    'step': 'That step belongs to a different recipe.',
-                })
+        # The rules themselves live on the model, so the admin enforces the
+        # same ones through full_clean(). Checked on a throwaway instance
+        # built from the merged values rather than on self.instance, which on
+        # a PATCH still holds the old values this request is replacing.
+        candidate = Image(recipe=recipe, step=step, type=image_type)
 
-        # Keep `type` and `step` telling the same story. models.py splits them
-        # this way: step photos name their step, cover and ingredient shots
-        # belong to the recipe as a whole and leave it null.
-        if image_type == Image.Type.STEP and step is None:
-            raise serializers.ValidationError({
-                'step': 'A step photo must say which step it belongs to.',
-            })
-        if image_type in (Image.Type.INGREDIENT, Image.Type.FINAL):
-            if step is not None:
-                raise serializers.ValidationError({
-                    'step': (
-                        f'A {image_type} image belongs to the recipe as a '
-                        f'whole, not to one step.'
-                    ),
-                })
+        try:
+            # clean(), not full_clean(): DRF has already validated the fields
+            # themselves, and full_clean() would add a uniqueness query per
+            # request for no benefit.
+            candidate.clean()
+        except DjangoValidationError as exc:
+            # DRF's own converter, so the error stays keyed on `step` and the
+            # 400 body keeps the shape clients already expect.
+            raise serializers.ValidationError(as_serializer_error(exc))
 
         return attrs
 

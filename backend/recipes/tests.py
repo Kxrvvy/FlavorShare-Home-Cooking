@@ -8,12 +8,17 @@ recipe that has no content yet.
 """
 
 from decimal import Decimal
+from types import SimpleNamespace
 
+from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
+from django.urls import reverse
 
+from .admin import ImageAdmin, ImageInline
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 from .serializers import (
     ImageSerializer,
@@ -335,6 +340,215 @@ class IngredientSerializerTests(RecipeTestCase):
         serializer = IngredientSerializer(data={'name': '   '})
         self.assertFalse(serializer.is_valid())
         self.assertIn('name', serializer.errors)
+
+
+class ImageCleanTests(RecipeTestCase):
+    """Image.clean() - the one place the step/recipe rules are written.
+
+    ImageSerializer and the Django admin both reach these rules through this
+    method, so the cases below are what both of them inherit.
+    """
+
+    def setUp(self):
+        self.step = Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+
+    def _image(self, **overrides):
+        values = {
+            'recipe': self.recipe,
+            'step': self.step,
+            'uploaded_by': self.user,
+            'url': 'https://example.com/a.jpg',
+            'type': Image.Type.STEP,
+        }
+        values.update(overrides)
+        return Image(**values)
+
+    def test_a_valid_step_photo_passes(self):
+        self._image().clean()
+
+    def test_a_final_image_without_a_step_passes(self):
+        self._image(type=Image.Type.FINAL, step=None).clean()
+
+    def test_a_step_from_another_recipe_is_rejected(self):
+        other = Recipe.objects.create(user=self.user, title='Sinigang')
+        stranger = Step.objects.create(
+            recipe=other, step_number=1, instruction='Simmer.'
+        )
+
+        with self.assertRaises(DjangoValidationError):
+            self._image(step=stranger).clean()
+
+    def test_a_step_photo_must_name_its_step(self):
+        with self.assertRaises(DjangoValidationError):
+            self._image(step=None).clean()
+
+    def test_a_final_image_may_not_pin_a_step(self):
+        """A matching step still has to agree with `type`."""
+        with self.assertRaises(DjangoValidationError):
+            self._image(type=Image.Type.FINAL).clean()
+
+    def test_an_ingredient_image_may_not_pin_a_step(self):
+        with self.assertRaises(DjangoValidationError):
+            self._image(type=Image.Type.INGREDIENT).clean()
+
+    def test_errors_are_keyed_on_the_step_field(self):
+        """Both callers attach the message to `step`, so it must be keyed."""
+        with self.assertRaises(DjangoValidationError) as caught:
+            self._image(step=None).clean()
+
+        self.assertIn('step', caught.exception.message_dict)
+
+    def test_full_clean_runs_it(self):
+        """full_clean() is the door the admin's ModelForm comes through."""
+        with self.assertRaises(DjangoValidationError):
+            self._image(type=Image.Type.FINAL).full_clean()
+
+
+class ImageAdminValidationTests(RecipeTestCase):
+    """The admin inherits the rules from the model, with no copy of its own."""
+
+    def setUp(self):
+        self.step = Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+        self.request = RequestFactory().get('/')
+        self.request.user = self.user
+
+    def _admin_form(self, **overrides):
+        data = {
+            'recipe': self.recipe.pk,
+            'step': self.step.pk,
+            'uploaded_by': self.user.pk,
+            'url': 'https://example.com/a.jpg',
+            'type': Image.Type.STEP,
+        }
+        data.update(overrides)
+
+        form_class = ImageAdmin(Image, django_admin.site).get_form(
+            self.request
+        )
+        return form_class(data=data)
+
+    def test_admin_form_accepts_a_valid_step_photo(self):
+        form = self._admin_form()
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_admin_form_rejects_a_step_from_another_recipe(self):
+        other = Recipe.objects.create(user=self.user, title='Sinigang')
+        stranger = Step.objects.create(
+            recipe=other, step_number=1, instruction='Simmer.'
+        )
+
+        form = self._admin_form(step=stranger.pk)
+        self.assertFalse(form.is_valid())
+        self.assertIn('step', form.errors)
+
+    def test_admin_form_rejects_a_final_image_pinned_to_a_step(self):
+        form = self._admin_form(type=Image.Type.FINAL)
+        self.assertFalse(form.is_valid())
+        self.assertIn('step', form.errors)
+
+    def test_the_inline_step_dropdown_hides_other_recipes_steps(self):
+        """Belt and braces: the cross-recipe row is unreachable from the UI."""
+        other = Recipe.objects.create(user=self.user, title='Sinigang')
+        stranger = Step.objects.create(
+            recipe=other, step_number=1, instruction='Simmer.'
+        )
+
+        request = RequestFactory().get(
+            f'/admin/recipes/recipe/{self.recipe.pk}/change/'
+        )
+        request.user = self.user
+        request.resolver_match = SimpleNamespace(
+            kwargs={'object_id': str(self.recipe.pk)}
+        )
+
+        field = ImageInline(
+            Recipe, django_admin.site
+        ).formfield_for_foreignkey(Image._meta.get_field('step'), request)
+
+        self.assertIn(self.step, field.queryset)
+        self.assertNotIn(stranger, field.queryset)
+
+
+class ImageInlineAdminTests(TestCase):
+    """The recipe page's image inline, driven through the real admin.
+
+    Posted rather than assembled by hand: an inline formset built from a bare
+    request treats its extra form as unchanged and skips validation entirely,
+    so a hand-built one passes without ever running clean() and proves
+    nothing. These go through the change view the way a person would.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create_user(
+            username='boss',
+            email='boss@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+        cls.recipe = Recipe.objects.create(user=cls.admin, title='Adobo')
+        cls.step = Step.objects.create(
+            recipe=cls.recipe, step_number=1, instruction='Boil.'
+        )
+
+    def setUp(self):
+        self.client.force_login(self.admin)
+
+    def _post_image_row(self, image_type):
+        return self.client.post(
+            reverse('admin:recipes_recipe_change', args=[self.recipe.pk]),
+            {
+                'title': 'Adobo',
+                'user': str(self.admin.pk),
+                'description': '',
+                'cuisine_type': '',
+                'prep_time': '',
+                'cook_time': '',
+                'servings': '',
+                'difficulty': '',
+                'status': Recipe.Status.DRAFT,
+                'steps-TOTAL_FORMS': '0',
+                'steps-INITIAL_FORMS': '0',
+                'steps-MIN_NUM_FORMS': '0',
+                'steps-MAX_NUM_FORMS': '1000',
+                'recipe_ingredients-TOTAL_FORMS': '0',
+                'recipe_ingredients-INITIAL_FORMS': '0',
+                'recipe_ingredients-MIN_NUM_FORMS': '0',
+                'recipe_ingredients-MAX_NUM_FORMS': '1000',
+                'images-TOTAL_FORMS': '1',
+                'images-INITIAL_FORMS': '0',
+                'images-MIN_NUM_FORMS': '0',
+                'images-MAX_NUM_FORMS': '1000',
+                'images-0-type': image_type,
+                'images-0-step': str(self.step.pk),
+                'images-0-url': 'https://example.com/a.jpg',
+                'images-0-uploaded_by': str(self.admin.pk),
+            },
+        )
+
+    def test_a_valid_step_photo_saves(self):
+        """Also proves the parent FK is set before clean() compares it."""
+        response = self._post_image_row(Image.Type.STEP)
+
+        self.assertEqual(response.status_code, 302)
+        image = Image.objects.get()
+        self.assertEqual(image.recipe_id, self.recipe.pk)
+        self.assertEqual(image.step_id, self.step.pk)
+
+    def test_an_incoherent_type_is_refused(self):
+        """Image.clean() reaches inline rows, with no admin-side copy."""
+        response = self._post_image_row(Image.Type.FINAL)
+
+        # The page is redisplayed rather than redirecting on save.
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Image.objects.count(), 0)
+        self.assertContains(
+            response, 'belongs to the recipe as a whole', html=False
+        )
 
 
 class ImageSerializerTests(RecipeTestCase):

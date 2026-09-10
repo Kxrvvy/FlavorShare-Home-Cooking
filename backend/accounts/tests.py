@@ -216,6 +216,98 @@ class IsAdminPropertyTests(PermissionTestCase):
         self.assertFalse(self.registered.is_staff)
 
 
+class AdminPermissionTests(PermissionTestCase):
+    """What an Admin-role account may actually do inside the Django admin.
+
+    is_staff only opens the door. These are the checks the admin runs for
+    every model page and every sidebar entry, and PermissionsMixin answers
+    them from the permissions tables - which an Admin-role account has no
+    rows in.
+    """
+
+    def test_admin_holds_every_permission(self):
+        self.assertTrue(self.admin.has_perm('recipes.view_recipe'))
+        self.assertTrue(self.admin.has_perm('recipes.delete_recipe'))
+        self.assertTrue(self.admin.has_perm('accounts.change_user'))
+
+    def test_admin_sees_every_app(self):
+        self.assertTrue(self.admin.has_module_perms('recipes'))
+        self.assertTrue(self.admin.has_module_perms('accounts'))
+
+    def test_registered_user_holds_none(self):
+        self.assertFalse(self.registered.has_perm('recipes.view_recipe'))
+        self.assertFalse(self.registered.has_module_perms('recipes'))
+
+    def test_guest_role_holds_none(self):
+        self.assertFalse(self.guest.has_perm('recipes.view_recipe'))
+        self.assertFalse(self.guest.has_module_perms('recipes'))
+
+    def test_a_deactivated_admin_holds_none(self):
+        """Removal is a deactivation, so the role alone must not be enough."""
+        self.admin.is_active = False
+
+        self.assertFalse(self.admin.has_perm('recipes.view_recipe'))
+        self.assertFalse(self.admin.has_module_perms('recipes'))
+
+    def test_superuser_is_unaffected(self):
+        self.registered.is_superuser = True
+
+        self.assertTrue(self.registered.has_perm('recipes.view_recipe'))
+        self.assertTrue(self.registered.has_module_perms('recipes'))
+
+
+class AdminSiteAccessTests(TestCase):
+    """The 403 this fixes, exercised against the real admin site."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create_user(
+            username='boss',
+            email='boss@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+        cls.registered = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+        )
+
+    def test_admin_role_reaches_the_index(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('admin:index'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_admin_role_may_open_a_model_page(self):
+        """This returned 403 before has_perm was overridden."""
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse('admin:recipes_recipe_changelist')
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_admin_role_may_open_the_user_page(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse('admin:accounts_user_changelist'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_a_registered_user_is_bounced_to_the_login_screen(self):
+        """Not staff, so the admin never even asks about permissions."""
+        self.client.force_login(self.registered)
+        response = self.client.get(
+            reverse('admin:recipes_recipe_changelist')
+        )
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+
+    def test_a_deactivated_admin_cannot_log_in(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=['is_active'])
+
+        self.assertFalse(self.client.login(
+            username='boss', password='n0t-a-real-password'
+        ))
+
+
 class LogoutTests(APITestCase):
     """POST /api/accounts/logout/ and the refresh-rotation rules behind it."""
 

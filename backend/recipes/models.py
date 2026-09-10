@@ -14,6 +14,7 @@ would make a half-built draft impossible to save.
 """
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -203,9 +204,9 @@ class Image(models.Model):
     # Nullable because most images belong to the recipe as a whole. Deleting
     # a step takes its photo with it.
     #
-    # NOTE: nothing here stops this pointing at a step from a *different*
-    # recipe - that check is cross-table and belongs in the serializer that
-    # creates images. It is still owed.
+    # No column constraint stops this pointing at a step from a *different*
+    # recipe - the check is cross-table. clean() below is where it lives, so
+    # the API and the Django admin both get it from one place.
     step = models.ForeignKey(
         Step,
         on_delete=models.CASCADE,
@@ -237,6 +238,53 @@ class Image(models.Model):
 
     def __str__(self):
         return f'{self.get_type_display()} image for {self.recipe.title}'
+
+    def clean(self):
+        """The two rules the database cannot express, in one place.
+
+        Lives on the model rather than in a serializer because there are two
+        ways into this table. DRF calls it from ImageSerializer.validate();
+        Django's ModelForm calls it through full_clean(), which is what makes
+        the admin - including the inline on the recipe page - refuse the same
+        rows the API refuses, with no admin-specific validation code.
+
+        Errors are keyed on `step` so both callers can attach them to that
+        field: DRF via as_serializer_error(), the admin form automatically.
+
+        Note this is not called on a plain .save(). Code creating images
+        directly - fixtures, the shell, a data migration - bypasses it, the
+        same as any other Django model validation.
+        """
+        errors = {}
+
+        # Compared by id rather than by object so an unsaved instance built
+        # from ids alone still gets checked. The mismatch is part of this
+        # condition, not nested inside it, so a step that *does* match falls
+        # through to the checks below instead of skipping them.
+        if (
+            self.step_id is not None
+            and self.recipe_id is not None
+            and self.step.recipe_id != self.recipe_id
+        ):
+            errors['step'] = 'That step belongs to a different recipe.'
+
+        # Keep `type` and `step` telling the same story: step photos name
+        # their step, cover and ingredient shots belong to the recipe as a
+        # whole and leave it null.
+        elif self.type == self.Type.STEP and self.step_id is None:
+            errors['step'] = 'A step photo must say which step it belongs to.'
+
+        elif self.step_id is not None and self.type in (
+            self.Type.INGREDIENT,
+            self.Type.FINAL,
+        ):
+            errors['step'] = (
+                f'A {self.type} image belongs to the recipe as a whole, '
+                f'not to one step.'
+            )
+
+        if errors:
+            raise ValidationError(errors)
 
 
 class RecipeIngredient(models.Model):

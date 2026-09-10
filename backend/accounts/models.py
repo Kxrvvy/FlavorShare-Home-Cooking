@@ -110,3 +110,38 @@ class User(AbstractBaseUser, PermissionsMixin):
         a separate name because Django looks for `is_staff` specifically.
         """
         return self.is_admin
+
+    # Django's admin asks two separate questions: is_staff decides whether you
+    # may open /admin/ at all, and these two decide what you may do once you
+    # are in. PermissionsMixin answers them from the groups and permissions
+    # tables, short-circuiting to True only for is_superuser - so without the
+    # overrides below an Admin-role account reaches the admin index and then
+    # gets a 403 on every model page, which is not the access the role is
+    # meant to carry.
+
+    def has_perm(self, perm, obj=None):
+        """Admins hold every permission; everyone else falls back to Django.
+
+        Blanket rather than a curated permission Group, because this project
+        has one Admin role that already carries full moderation powers - a
+        Group would have to be kept in step with every model added later, and
+        drifting out of step would fail silently.
+
+        The is_active check is the important half. AdminUserViewSet deletes an
+        account by deactivating it rather than destroying it, so a "removed"
+        admin still has role='admin'; without this they would keep full access
+        to the admin site.
+
+        `obj` is accepted and ignored: Django's object-level permission hook is
+        not used anywhere in this project, and DRF answers object permissions
+        through accounts.permissions instead.
+        """
+        if self.is_active and self.is_admin:
+            return True
+        return super().has_perm(perm, obj)
+
+    def has_module_perms(self, app_label):
+        """Whether an app shows up in the admin sidebar. Same rule as above."""
+        if self.is_active and self.is_admin:
+            return True
+        return super().has_module_perms(app_label)

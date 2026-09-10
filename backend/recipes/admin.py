@@ -12,55 +12,9 @@ helps nobody. Images are registered both ways, because moderating a bad photo
 starts from the photo, not from the recipe it happens to sit in.
 """
 
-from django import forms
 from django.contrib import admin
 
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
-
-
-def _validate_step_belongs_to_recipe(recipe, step, image_type):
-    """The rule ImageSerializer.validate() enforces for the API.
-
-    Repeated here because the admin does not go through DRF, and an admin
-    picking the wrong step out of a dropdown would write exactly the row the
-    API refuses. Kept as one function so the two copies cannot drift.
-    """
-    errors = {}
-
-    if step is not None and recipe is not None:
-        if step.recipe_id != recipe.pk:
-            errors['step'] = 'That step belongs to a different recipe.'
-
-    if image_type == Image.Type.STEP and step is None:
-        errors['step'] = 'A step photo must say which step it belongs to.'
-
-    if image_type in (Image.Type.INGREDIENT, Image.Type.FINAL):
-        if step is not None:
-            errors['step'] = (
-                f'A {image_type} image belongs to the recipe as a whole, '
-                f'not to one step.'
-            )
-
-    return errors
-
-
-class ImageAdminForm(forms.ModelForm):
-    """Applies the step/recipe rules to the standalone Image admin."""
-
-    class Meta:
-        model = Image
-        fields = '__all__'
-
-    def clean(self):
-        cleaned = super().clean()
-        errors = _validate_step_belongs_to_recipe(
-            cleaned.get('recipe'),
-            cleaned.get('step'),
-            cleaned.get('type'),
-        )
-        for field, message in errors.items():
-            self.add_error(field, message)
-        return cleaned
 
 
 class StepInline(admin.TabularInline):
@@ -96,8 +50,9 @@ class ImageInline(admin.TabularInline):
         """Offer only this recipe's own steps in the `step` dropdown.
 
         Left alone, the dropdown lists every step in the database and invites
-        exactly the cross-recipe mistake ImageAdminForm rejects. Narrowing the
-        choices means the mistake is hard to make, not merely caught.
+        exactly the cross-recipe mistake Image.clean() rejects. Narrowing the
+        choices means the mistake is hard to make, not merely caught - this is
+        UX, and the model keeps the rule.
         """
         if db_field.name == 'step':
             recipe_id = None
@@ -205,9 +160,10 @@ class ImageAdmin(admin.ModelAdmin):
     Registered separately from the recipe inline because taking down an
     inappropriate image starts from the image itself, and the moderator will
     not know which recipe it belongs to.
-    """
 
-    form = ImageAdminForm
+    No custom form: ModelForm runs full_clean() on the instance, so
+    Image.clean() already refuses the rows the API refuses.
+    """
 
     list_display = ('__str__', 'type', 'recipe', 'step', 'uploaded_by')
     list_filter = ('type',)
