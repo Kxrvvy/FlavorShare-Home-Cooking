@@ -177,6 +177,11 @@ correct and complete as of the last review.
   cover (`final`) and `ingredient` images belong to the recipe as a whole
   and leave it null. Added after the original ERD — **the diagram needs
   redrawing to match.**
+- **Soft limitation, not a bug:** nothing caps how many images may point at
+  one step. The frontend renders a single photo slot per step to match the
+  reference design, so extra step photos would simply not be displayed. A
+  uniqueness constraint was considered and deliberately not added. Worth
+  knowing if the Admin Dashboard ever counts or lists recipe images.
 - **Framework tables:** Django and SimpleJWT create their own tables in
   `flavorshare_db` (sessions, migrations, content types, permissions,
   admin log, token blacklist), so the live database holds more tables

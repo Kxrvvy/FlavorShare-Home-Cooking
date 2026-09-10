@@ -17,7 +17,8 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='Ingredient',
             fields=[
-                ('ingredient_id', models.AutoField(primary_key=True, serialize=False)),
+                ('ingredient_id', models.AutoField(
+                    primary_key=True, serialize=False)),
                 ('name', models.CharField(max_length=100, unique=True)),
                 ('category', models.CharField(blank=True, max_length=50, null=True)),
             ],
@@ -32,16 +33,20 @@ class Migration(migrations.Migration):
                 ('recipe_id', models.AutoField(primary_key=True, serialize=False)),
                 ('title', models.CharField(max_length=150)),
                 ('description', models.TextField(blank=True, null=True)),
-                ('cuisine_type', models.CharField(blank=True, max_length=50, null=True)),
+                ('cuisine_type', models.CharField(
+                    blank=True, max_length=50, null=True)),
                 ('prep_time', models.PositiveIntegerField(blank=True, null=True)),
                 ('cook_time', models.PositiveIntegerField(blank=True, null=True)),
                 ('servings', models.PositiveIntegerField(blank=True, null=True)),
-                ('difficulty', models.CharField(blank=True, choices=[('easy', 'Easy'), ('medium', 'Medium'), ('hard', 'Hard')], max_length=6, null=True)),
-                ('status', models.CharField(choices=[('draft', 'Draft'), ('published', 'Published')], default='draft', max_length=9)),
+                ('difficulty', models.CharField(blank=True, choices=[
+                 ('easy', 'Easy'), ('medium', 'Medium'), ('hard', 'Hard')], max_length=6, null=True)),
+                ('status', models.CharField(choices=[
+                 ('draft', 'Draft'), ('published', 'Published')], default='draft', max_length=9)),
                 ('view_count', models.PositiveIntegerField(default=0)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='recipes', to=settings.AUTH_USER_MODEL)),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT,
+                 related_name='recipes', to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'db_table': 'Recipe',
@@ -51,12 +56,16 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='RecipeIngredient',
             fields=[
-                ('recipe_ingredient_id', models.AutoField(primary_key=True, serialize=False)),
-                ('quantity', models.DecimalField(blank=True, decimal_places=2, max_digits=6, null=True)),
+                ('recipe_ingredient_id', models.AutoField(
+                    primary_key=True, serialize=False)),
+                ('quantity', models.DecimalField(blank=True,
+                 decimal_places=2, max_digits=6, null=True)),
                 ('unit', models.CharField(blank=True, max_length=30, null=True)),
                 ('notes', models.CharField(blank=True, max_length=50, null=True)),
-                ('ingredient', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='recipe_links', to='recipes.ingredient')),
-                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='recipe_ingredients', to='recipes.recipe')),
+                ('ingredient', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT,
+                 related_name='recipe_links', to='recipes.ingredient')),
+                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
+                 related_name='recipe_ingredients', to='recipes.recipe')),
             ],
             options={
                 'db_table': 'RecipeIngredient',
@@ -68,7 +77,8 @@ class Migration(migrations.Migration):
                 ('step_id', models.AutoField(primary_key=True, serialize=False)),
                 ('step_number', models.PositiveIntegerField()),
                 ('instruction', models.TextField()),
-                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='steps', to='recipes.recipe')),
+                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
+                 related_name='steps', to='recipes.recipe')),
             ],
             options={
                 'db_table': 'Step',
@@ -80,10 +90,14 @@ class Migration(migrations.Migration):
             fields=[
                 ('image_id', models.AutoField(primary_key=True, serialize=False)),
                 ('url', models.URLField(max_length=255)),
-                ('type', models.CharField(choices=[('ingredient', 'Ingredient'), ('step', 'Step'), ('final', 'Final')], max_length=10)),
-                ('uploaded_by', models.ForeignKey(db_column='uploaded_by', on_delete=django.db.models.deletion.PROTECT, related_name='uploaded_images', to=settings.AUTH_USER_MODEL)),
-                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='images', to='recipes.recipe')),
-                ('step', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='images', to='recipes.step')),
+                ('type', models.CharField(choices=[
+                 ('ingredient', 'Ingredient'), ('step', 'Step'), ('final', 'Final')], max_length=10)),
+                ('uploaded_by', models.ForeignKey(db_column='uploaded_by', on_delete=django.db.models.deletion.PROTECT,
+                 related_name='uploaded_images', to=settings.AUTH_USER_MODEL)),
+                ('recipe', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
+                 related_name='images', to='recipes.recipe')),
+                ('step', models.ForeignKey(blank=True, null=True,
+                 on_delete=django.db.models.deletion.CASCADE, related_name='images', to='recipes.step')),
             ],
             options={
                 'db_table': 'Image',
@@ -95,10 +109,12 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='recipeingredient',
-            constraint=models.UniqueConstraint(fields=('recipe', 'ingredient'), name='unique_ingredient_per_recipe'),
+            constraint=models.UniqueConstraint(
+                fields=('recipe', 'ingredient'), name='unique_ingredient_per_recipe'),
         ),
         migrations.AddConstraint(
             model_name='step',
-            constraint=models.UniqueConstraint(fields=('recipe', 'step_number'), name='unique_step_number_per_recipe'),
+            constraint=models.UniqueConstraint(
+                fields=('recipe', 'step_number'), name='unique_step_number_per_recipe'),
         ),
     ]

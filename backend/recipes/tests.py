@@ -1,8 +1,10 @@
-"""Tests for the recipe core models.
+"""Tests for the recipe core models and serializers.
 
 Weighted toward the rules that would otherwise fail silently: the deletion
-behaviour that protects a user's content, and the constraints that keep a
-recipe's steps and ingredients coherent.
+behaviour that protects a user's content, the constraints that keep a
+recipe's steps and ingredients coherent, and the two rules the database
+cannot express - an image pinned to another recipe's step, and publishing a
+recipe that has no content yet.
 """
 
 from decimal import Decimal
@@ -13,6 +15,13 @@ from django.db.models import ProtectedError
 from django.test import TestCase
 
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
+from .serializers import (
+    ImageSerializer,
+    IngredientSerializer,
+    RecipeIngredientSerializer,
+    RecipeWriteSerializer,
+    StepSerializer,
+)
 
 User = get_user_model()
 
@@ -293,3 +302,281 @@ class StrTests(RecipeTestCase):
             unit='tsp',
         )
         self.assertEqual(str(link), '2 tsp salt')
+
+
+class IngredientSerializerTests(RecipeTestCase):
+    """Names are normalised before the uniqueness check, not after.
+
+    Checking after is what turns a duplicate into a 500: the raw input finds
+    no matching row, passes, and only collides once save() lowercases it.
+    """
+
+    def test_name_is_normalised_on_the_way_in(self):
+        serializer = IngredientSerializer(data={'name': 'Basil'})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data['name'], 'basil')
+
+    def test_differently_cased_duplicate_is_a_validation_error(self):
+        Ingredient.objects.create(name='salt')
+
+        serializer = IngredientSerializer(data={'name': 'Salt'})
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('name', serializer.errors)
+
+    def test_renaming_an_ingredient_does_not_clash_with_itself(self):
+        salt = Ingredient.objects.create(name='salt')
+
+        serializer = IngredientSerializer(
+            salt, data={'name': 'Salt'}, partial=True
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_a_blank_name_is_rejected(self):
+        serializer = IngredientSerializer(data={'name': '   '})
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('name', serializer.errors)
+
+
+class ImageSerializerTests(RecipeTestCase):
+    """The cross-recipe check the database cannot make."""
+
+    def setUp(self):
+        self.step = Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+
+    def _data(self, **overrides):
+        data = {
+            'recipe': self.recipe.pk,
+            'url': 'https://example.com/a.jpg',
+            'type': Image.Type.STEP,
+            'step': self.step.pk,
+        }
+        data.update(overrides)
+        return data
+
+    def test_a_valid_step_photo_passes(self):
+        serializer = ImageSerializer(data=self._data())
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_step_belonging_to_another_recipe_is_rejected(self):
+        other = Recipe.objects.create(user=self.user, title='Sinigang')
+        stranger = Step.objects.create(
+            recipe=other, step_number=1, instruction='Simmer.'
+        )
+
+        serializer = ImageSerializer(data=self._data(step=stranger.pk))
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('step', serializer.errors)
+
+    def test_a_step_photo_must_name_its_step(self):
+        serializer = ImageSerializer(data=self._data(step=None))
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('step', serializer.errors)
+
+    def test_a_final_image_may_not_pin_a_step(self):
+        serializer = ImageSerializer(
+            data=self._data(type=Image.Type.FINAL)
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('step', serializer.errors)
+
+    def test_a_final_image_without_a_step_is_fine(self):
+        serializer = ImageSerializer(
+            data=self._data(type=Image.Type.FINAL, step=None)
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_uploaded_by_is_not_writable(self):
+        """The view sets the uploader; a client must not be able to."""
+        intruder = User.objects.create_user(
+            username='intruder',
+            email='intruder@example.com',
+            password='n0t-a-real-password',
+        )
+
+        serializer = ImageSerializer(
+            data=self._data(uploaded_by=intruder.pk)
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn('uploaded_by', serializer.validated_data)
+
+
+class StepSerializerTests(RecipeTestCase):
+    """Step numbers are the server's to assign."""
+
+    def test_the_first_step_is_numbered_one(self):
+        serializer = StepSerializer(
+            data={'recipe': self.recipe.pk, 'instruction': 'Boil.'}
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data['step_number'], 1)
+
+    def test_the_next_step_continues_the_count(self):
+        Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+
+        serializer = StepSerializer(
+            data={'recipe': self.recipe.pk, 'instruction': 'Simmer.'}
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data['step_number'], 2)
+
+    def test_a_duplicate_number_is_a_validation_error(self):
+        Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+
+        serializer = StepSerializer(data={
+            'recipe': self.recipe.pk,
+            'step_number': 1,
+            'instruction': 'Simmer.',
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('step_number', serializer.errors)
+
+    def test_the_same_number_in_another_recipe_is_fine(self):
+        Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+        other = Recipe.objects.create(user=self.user, title='Sinigang')
+
+        serializer = StepSerializer(data={
+            'recipe': other.pk,
+            'step_number': 1,
+            'instruction': 'Simmer.',
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+
+class RecipeIngredientSerializerTests(RecipeTestCase):
+    """Typing a name finds the shared row instead of making a new one."""
+
+    def _data(self, **overrides):
+        data = {
+            'recipe': self.recipe.pk,
+            'ingredient_name': 'Salt',
+            'quantity': '2.00',
+            'unit': 'tsp',
+        }
+        data.update(overrides)
+        return data
+
+    def test_a_new_name_creates_the_lookup_row(self):
+        serializer = RecipeIngredientSerializer(data=self._data())
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        link = serializer.save()
+
+        self.assertEqual(link.ingredient.name, 'salt')
+        self.assertEqual(Ingredient.objects.filter(name='salt').count(), 1)
+
+    def test_an_existing_ingredient_is_reused(self):
+        """"Salt" must find the stored "salt" rather than collide with it."""
+        salt = Ingredient.objects.create(name='salt')
+
+        serializer = RecipeIngredientSerializer(data=self._data())
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        link = serializer.save()
+
+        self.assertEqual(link.ingredient, salt)
+        self.assertEqual(Ingredient.objects.count(), 1)
+
+    def test_the_same_ingredient_twice_is_a_validation_error(self):
+        RecipeIngredient.objects.create(
+            recipe=self.recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+
+        serializer = RecipeIngredientSerializer(data=self._data())
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('ingredient_name', serializer.errors)
+
+    def test_quantity_unit_and_notes_stay_optional(self):
+        serializer = RecipeIngredientSerializer(
+            data={'recipe': self.recipe.pk, 'ingredient_name': 'pepper'}
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+
+class RecipeWriteSerializerTests(RecipeTestCase):
+    """Ownership, the view counter, and the publish gate."""
+
+    def _publish(self, recipe=None):
+        return RecipeWriteSerializer(
+            recipe or self.recipe,
+            data={'status': Recipe.Status.PUBLISHED},
+            partial=True,
+        )
+
+    def test_user_and_view_count_are_not_writable(self):
+        intruder = User.objects.create_user(
+            username='intruder',
+            email='intruder@example.com',
+            password='n0t-a-real-password',
+        )
+
+        serializer = RecipeWriteSerializer(data={
+            'title': 'Lumpia',
+            'user': intruder.pk,
+            'view_count': 999,
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn('user', serializer.validated_data)
+        self.assertNotIn('view_count', serializer.validated_data)
+
+    def test_a_new_recipe_may_not_be_published_outright(self):
+        """Writes are flat, so a recipe being created has no content yet."""
+        serializer = RecipeWriteSerializer(data={
+            'title': 'Lumpia',
+            'status': Recipe.Status.PUBLISHED,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('status', serializer.errors)
+
+    def test_a_near_empty_draft_still_saves(self):
+        serializer = RecipeWriteSerializer(data={'title': 'Lumpia'})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_publishing_without_steps_is_refused(self):
+        RecipeIngredient.objects.create(
+            recipe=self.recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+
+        serializer = self._publish()
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('steps', str(serializer.errors['status']))
+
+    def test_publishing_without_ingredients_is_refused(self):
+        Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+
+        serializer = self._publish()
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('ingredients', str(serializer.errors['status']))
+
+    def test_publishing_with_both_succeeds(self):
+        Step.objects.create(
+            recipe=self.recipe, step_number=1, instruction='Boil.'
+        )
+        RecipeIngredient.objects.create(
+            recipe=self.recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+
+        serializer = self._publish()
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.save().status, Recipe.Status.PUBLISHED)
+
+    def test_resaving_a_published_recipe_is_not_blocked(self):
+        """The gate guards the transition, not every later edit."""
+        published = Recipe.objects.create(
+            user=self.user,
+            title='Sinigang',
+            status=Recipe.Status.PUBLISHED,
+        )
+
+        serializer = self._publish(published)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
