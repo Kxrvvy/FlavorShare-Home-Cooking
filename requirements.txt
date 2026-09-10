@@ -18,8 +18,10 @@ djangorestframework-simplejwt>=5.3.0
 django-cors-headers>=4.3.0
 
 # Image storage
+# The SDK only. django-cloudinary-storage backs ImageField/FileField through
+# Django's storage layer, and Image.url is a plain URLField - uploads go
+# through POST /api/recipes/images/upload/ instead, which stores just the URL.
 cloudinary>=1.40.0
-django-cloudinary-storage>=0.3.0
 
 # External API calls (Nutrition API, Email service)
 requests>=2.31.0

@@ -76,6 +76,9 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    # Uploads only. Image.url is a plain URLField, so Cloudinary is never
+    # wired in as a Django storage backend - see CLOUDINARY_STORAGE below.
+    'cloudinary',
 
     'accounts',
     'dashboard',
@@ -176,6 +179,29 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Uploaded media (local dev; Cloudinary takes over in production)
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+
+# Cloudinary
+# https://cloudinary.com/documentation/django_integration
+#
+# Recipe photos are uploaded through POST /api/recipes/images/upload/, which
+# hands the file to Cloudinary server-side and returns the hosted URL. Only
+# that URL is stored, in Image.url - a plain URLField - so Cloudinary is never
+# registered as a Django storage backend and STORAGES stays untouched. Keeping
+# the API secret on this side is the point: the frontend never sees it.
+#
+# Blank by default so a fresh clone still starts. The upload endpoint checks
+# for CLOUD_NAME and answers 503 with a readable message rather than failing
+# somewhere inside the SDK. README.md lists the keys.
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': env('CLOUDINARY_CLOUD_NAME', default=''),
+    'API_KEY': env('CLOUDINARY_API_KEY', default=''),
+    'API_SECRET': env('CLOUDINARY_API_SECRET', default=''),
+}
+
+# Largest file the upload endpoint will accept, in bytes. Checked before the
+# file is sent anywhere, so an oversized upload costs nothing.
+MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
