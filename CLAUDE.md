@@ -333,6 +333,20 @@ Each app follows the same internal structure:
 **Not yet decided / not yet built:**
 - Nutrition API provider (Edamam vs. Spoonacular vs. other) — deferred
 - Instructor confirmation that Django satisfies "approved server-side technology"
-- Actual `CREATE TABLE` DB script (in progress by a teammate)
-- Actual Django model code (not yet written in any app)
+- Actual `CREATE TABLE` DB script (in progress by a teammate) — note that
+  Django enforces `on_delete` in the ORM, not in DDL: the FKs it generates are
+  all `ON DELETE NO ACTION`, so a hand-written script using `ON DELETE CASCADE`
+  / `SET NULL` will not match the live database's constraints even when the
+  application behaviour agrees. See the note in `dashboard/models.py`.
 - Frontend folder/page structure (not yet discussed)
+- **Pending moderation metric** — Feature 8 lists it on the Admin Dashboard,
+  but nothing in the ERD records that a recipe or review *was* reported, so
+  there is no queue to count. Needs a decision: add a 16th table (`Flag` or
+  `Report`) or redefine the metric as something derivable. Deliberately not
+  implemented rather than filled with a fabricated number.
+- **Moderation is invisible to the Activity log** — `Activity.action_type` has
+  the ERD's five values (posted/edited/commented/rated/saved), none of which
+  describes unpublishing, this project's soft moderation action. So an admin
+  taking a recipe out of public view logs nothing, and the recent-activity feed
+  cannot show moderation history. Adding a sixth value is an ERD change; parked
+  with the item above since both point at the same gap.
