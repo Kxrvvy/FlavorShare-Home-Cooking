@@ -41,6 +41,31 @@ from .serializers import (
 )
 
 
+def require_visible_recipe(user, recipe):
+    """Refuse a write naming a recipe this user cannot see.
+
+    The create-time half of the visibility rule. Object-level permissions
+    never run on a POST, and `recipe` accepts any primary key in the table, so
+    without this a registered user could rate, review or save a draft that is
+    invisible to them everywhere else.
+
+    Reported as a 400 on the field rather than a 403, for the reason
+    recipes.views gives for preferring a 404 over a 403: a permission error
+    would confirm that the hidden recipe exists.
+
+    A module-level function rather than a method because two viewsets need it
+    and they do not share a base class - SavedRecipeViewSet scopes its
+    queryset to the caller instead. Two copies of a rule like this drift, and
+    the drift is a leak.
+    """
+    if visible_recipes(user).filter(pk=recipe.pk).exists():
+        return
+
+    raise ValidationError({
+        'recipe': 'That recipe does not exist.',
+    })
+
+
 class UserContentViewSet(viewsets.ModelViewSet):
     """Shared behaviour for rows one user writes about a recipe.
 
@@ -67,27 +92,11 @@ class UserContentViewSet(viewsets.ModelViewSet):
             recipe__in=visible_recipes(self.request.user),
         ).select_related('user', 'recipe')
 
-    def _require_visible_recipe(self, recipe):
-        """Refuse a write naming a recipe the caller cannot see.
-
-        The create-time half of the visibility rule. Object-level permissions
-        never run on a POST, and `recipe` accepts any primary key in the
-        table, so without this a registered user could rate or review a draft
-        that is invisible to them everywhere else.
-
-        Reported as a 400 on the field rather than a 403, for the reason
-        recipes.views gives for preferring a 404 over a 403: a permission
-        error would confirm that the hidden recipe exists.
-        """
-        if visible_recipes(self.request.user).filter(pk=recipe.pk).exists():
-            return
-
-        raise ValidationError({
-            'recipe': 'That recipe does not exist.',
-        })
-
     def perform_create(self, serializer):
-        self._require_visible_recipe(serializer.validated_data['recipe'])
+        require_visible_recipe(
+            self.request.user,
+            serializer.validated_data['recipe'],
+        )
         # `user` is read-only on the serializer: the credential decides who
         # wrote this, never the payload.
         serializer.save(user=self.request.user)
@@ -97,7 +106,7 @@ class UserContentViewSet(viewsets.ModelViewSet):
         # object-level check only vouched for where it came from.
         recipe = serializer.validated_data.get('recipe')
         if recipe is not None:
-            self._require_visible_recipe(recipe)
+            require_visible_recipe(self.request.user, recipe)
         serializer.save()
 
 
@@ -194,12 +203,11 @@ class SavedRecipeViewSet(viewsets.ModelViewSet):
         ).select_related('recipe')
 
     def perform_create(self, serializer):
-        # Same create-time visibility check as UserContentViewSet, for the
-        # same reason: `recipe` accepts any primary key in the table.
-        recipe = serializer.validated_data['recipe']
-        if not visible_recipes(self.request.user).filter(pk=recipe.pk).exists():
-            raise ValidationError({
-                'recipe': 'That recipe does not exist.',
-            })
-
+        # The same one rule UserContentViewSet uses - scoping the queryset to
+        # the caller hides other people's rows, but says nothing about which
+        # recipes this caller may write about.
+        require_visible_recipe(
+            self.request.user,
+            serializer.validated_data['recipe'],
+        )
         serializer.save(user=self.request.user)
