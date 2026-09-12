@@ -182,6 +182,16 @@ correct and complete as of the last review.
   reference design, so extra step photos would simply not be displayed. A
   uniqueness constraint was considered and deliberately not added. Worth
   knowing if the Admin Dashboard ever counts or lists recipe images.
+- **Silent schedule gaps, not a bug:** `MealPlanEntry` rows are read through
+  `visible_recipes()`, so if a recipe you scheduled is later unpublished by
+  its author, that entry disappears from the plan while its row stays in the
+  database. This is deliberate and matches `SavedRecipe`, which hides
+  unpublished recipes from a collection the same way — one visibility rule,
+  not a per-feature exception. The consequence is that a plan can look like it
+  has holes for no visible reason. Depth-pass options: surface the entry as
+  "recipe no longer available" instead of omitting it, or have the Admin
+  Dashboard report the divergence. Worth knowing if an entry count ever
+  disagrees with what the schedule shows.
 - **Framework tables:** Django and SimpleJWT create their own tables in
   `flavorshare_db` (sessions, migrations, content types, permissions,
   admin log, token blacklist), so the live database holds more tables
