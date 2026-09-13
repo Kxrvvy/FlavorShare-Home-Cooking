@@ -192,6 +192,26 @@ correct and complete as of the last review.
   "recipe no longer available" instead of omitting it, or have the Admin
   Dashboard report the divergence. Worth knowing if an entry count ever
   disagrees with what the schedule shows.
+- **Auth support tables (not ERD entities):** `PendingSignup` and
+  `OneTimeCode` live in the `accounts` app to carry email verification and
+  password reset. They are in neither the ERD nor `flavorshare.sql`, and are
+  excluded from both on purpose — they are infrastructure for a feature, like
+  the framework tables below, not things the application is *about*. Both hold
+  short-lived rows: created, used once, deleted. Signup is **deferred account
+  creation** — a `Users` row is written only after its email is verified, so
+  there is no `is_verified` column and no login-blocking logic anywhere.
+- **Soft limitation, not a bug:** a username is only checked against *active*
+  `PendingSignup` rows in the serializer, not by a database constraint, so two
+  people registering the same username in the same instant can both pass the
+  check before either row commits, and the second one wins the username at
+  verification time. A unique constraint is not the fix: expired pending rows
+  are never deleted, so one holding a username for an abandoned signup would
+  block that username forever. Accepted at this scale; worth knowing before
+  anyone treats pending usernames as reserved.
+- **Expired `PendingSignup` / `OneTimeCode` rows are never deleted.** Nothing
+  breaks — every read goes through `.active()`, and re-registering an address
+  replaces its expired row — but the tables grow. A management command or
+  scheduled cleanup task is depth-pass work.
 - **Framework tables:** Django and SimpleJWT create their own tables in
   `flavorshare_db` (sessions, migrations, content types, permissions,
   admin log, token blacklist), so the live database holds more tables

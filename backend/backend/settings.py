@@ -203,6 +203,29 @@ CLOUDINARY_STORAGE = {
 # file is sent anywhere, so an oversized upload costs nothing.
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
 
+
+# Resend
+# https://resend.com/docs/api-reference/emails/send-email
+#
+# Outbound email for signup verification codes and password resets, sent from
+# accounts/emails.py. Only the API key lives on this side; the frontend never
+# sees it, and nothing about a code is ever returned in an API response.
+#
+# Blank by default so a fresh clone still starts and the test suite still runs -
+# the suite mocks the SDK throughout and never needs a real key. accounts/emails.py
+# raises EmailNotConfigured when the key is missing, which the views turn into a
+# readable 503 rather than an error from inside the SDK. README.md lists the keys.
+RESEND_API_KEY = env('RESEND_API_KEY', default='')
+
+# The From address. Resend only accepts a domain you have verified with them;
+# onboarding@resend.dev is their sandbox sender, which works without a domain
+# but can only deliver to the account owner's own address. Fine for development,
+# has to change before the demo goes to anyone else.
+RESEND_FROM_EMAIL = env(
+    'RESEND_FROM_EMAIL',
+    default='FlavorShare <onboarding@resend.dev>',
+)
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

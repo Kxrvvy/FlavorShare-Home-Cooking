@@ -102,12 +102,27 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | `CLOUDINARY_CLOUD_NAME` | for uploads | `dxxxxxxxx` | Cloudinary account to upload recipe photos to. |
 | `CLOUDINARY_API_KEY` | for uploads | `123456789012345` | Public half of the Cloudinary credentials. |
 | `CLOUDINARY_API_SECRET` | for uploads | *from your dashboard* | Secret half. Server-side only — never put this in the frontend. |
+| `RESEND_API_KEY` | for signup & reset | `re_xxxxxxxxxxxx` | Sends verification and password-reset codes. Server-side only. |
+| `RESEND_FROM_EMAIL` | no | `FlavorShare <onboarding@resend.dev>` | The From address. Defaults to Resend's sandbox sender. |
 
 The three `CLOUDINARY_*` keys are needed only for image uploads. Leave them
 out and everything else runs; `POST /api/recipes/images/upload/` answers
 `503` with a message saying they are missing. Find all three on the Cloudinary
 dashboard at <https://console.cloudinary.com> under **Account Details** — the
 free tier is enough for this project.
+
+`RESEND_API_KEY` works the same way: leave it out and everything else runs,
+but `POST /api/accounts/register/` and the password-reset request answer `503`
+saying it is missing. Since **an account is only created once its email is
+verified**, signup cannot complete without this key — so you need it to
+register a user through the API. Get one at <https://resend.com> under **API
+Keys**.
+
+`RESEND_FROM_EMAIL` defaults to Resend's sandbox sender
+(`onboarding@resend.dev`), which needs no domain setup but **only delivers to
+the email address that owns the Resend account**. That is fine while
+developing; before showing signup to anyone else, verify a domain with Resend
+and set this to an address on it.
 
 Generate your own `SECRET_KEY`:
 
@@ -125,6 +140,9 @@ SECRET_KEY=paste-your-generated-key-here
 CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_API_SECRET=your-api-secret
+
+# Needed to register a user at all - signup sends a verification code
+RESEND_API_KEY=your-resend-key
 ```
 
 The three optional keys have working defaults in `settings.py`; set them only
