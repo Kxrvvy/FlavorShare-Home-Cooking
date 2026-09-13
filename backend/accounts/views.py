@@ -1,13 +1,28 @@
-"""Views for the accounts app: registration, logout, and own-profile lookup.
+"""Views for the accounts app: signup, verification, password reset, profile.
 
 Login and token refresh are handled by SimpleJWT's built-in views, mounted
 globally at /api/token/ and /api/token/refresh/ in backend/urls.py. Logout
-lives here rather than at SimpleJWT's /api/token/blacklist/ so the three
-account actions the frontend needs sit under one prefix.
+lives here rather than at SimpleJWT's /api/token/blacklist/ so the account
+actions the frontend needs sit under one prefix.
+
+Signup is two requests, because an account is only created once its address is
+proven: /register/ writes a PendingSignup and emails a code, /verify-email/
+turns that into a User and hands back tokens. Nothing in between exists as an
+account, which is why no view here has to ask whether one is verified.
+
+Four of these views are open to anonymous callers - they are what somebody uses
+*before* they have credentials - so each opts out of the project-wide
+IsAuthenticated default explicitly.
+
+Email failures become HTTP status codes here and nowhere else.
+accounts/emails.py raises exceptions rather than returning responses, so that
+the same functions can be called from a management command later; translating
+them is this layer's job.
 """
 
+from django.db import transaction
 from rest_framework import generics, mixins, status, viewsets
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -19,21 +34,82 @@ from rest_framework_simplejwt.token_blacklist.models import (
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from .emails import (
+    EmailDeliveryFailed,
+    EmailNotConfigured,
+    send_password_reset_code,
+    send_signup_code,
+)
 from .models import User
 from .permissions import IsAdmin, IsRegisteredUser
 from .serializers import (
     AdminUserSerializer,
     PasswordChangeSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     RegisterSerializer,
+    ResendOTPSerializer,
     UserSerializer,
+    VerifyEmailSerializer,
 )
 
 
-class RegisterView(generics.CreateAPIView): # Create = POST
-    """POST /api/accounts/register/ - create a new registered user.
+class EmailUnavailable(APIException):
+    """503 - this server cannot send email at all.
 
-    Open to anonymous callers; the project-wide default permission is
-    IsAuthenticated, so this has to opt out explicitly.
+    A deployment problem, not the caller's. Mirrors the 503 the Cloudinary
+    upload endpoint answers when its credentials are missing, and says the same
+    kind of thing: the feature is not configured here, and retrying the same
+    request will not help.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+class EmailUndeliverable(APIException):
+    """502 - Resend was reachable and refused the message."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+
+
+def deliver(send, row):
+    """Send one code email, turning its failures into status codes.
+
+    Called inside an atomic block by every view that issues a code, so a
+    failure here rolls the code back with it. That matters most on a resend:
+    if the new code cannot be delivered, the caller keeps the one they were
+    already sent rather than being left holding a code the server has
+    forgotten.
+    """
+    try:
+        send(row)
+    except EmailNotConfigured as exc:
+        raise EmailUnavailable(str(exc)) from exc
+    except EmailDeliveryFailed as exc:
+        raise EmailUndeliverable(
+            f'The verification email could not be sent: {exc}'
+        ) from exc
+
+
+class RegisterView(generics.CreateAPIView): # Create = POST
+    """POST /api/accounts/register/ - start a signup and email a code.
+
+    Creates no account. It writes a PendingSignup and sends a verification code;
+    /verify-email/ is what creates the User. Re-posting the same address reissues
+    the code on the existing row rather than adding another - see
+    RegisterSerializer.create().
+
+    Answers 202, not 201. A row was created, but not the thing the caller asked
+    for: there is no account yet, and there may never be. 202 says "accepted,
+    not finished", which is exactly the state. Note this is a change from the
+    endpoint's previous behaviour, which returned 201 and a user profile.
+
+    The response deliberately carries no code. The code goes to the address
+    being proven and nowhere else - returning it here would make the whole
+    exercise decorative.
+
+    Open to anonymous callers; the project-wide default is IsAuthenticated, so
+    this opts out explicitly.
     """
 
     serializer_class = RegisterSerializer
@@ -42,14 +118,149 @@ class RegisterView(generics.CreateAPIView): # Create = POST
     def create(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # Atomic so a failed send leaves nothing behind. Without it a caller
+        # could be told the server is broken while a pending row - holding a
+        # code they never received - sits in the way of their next attempt.
+        with transaction.atomic():
+            pending = serializer.save()
+            deliver(send_signup_code, pending)
+
+        return Response(
+            {
+                'email': pending.email,
+                'expires_at': pending.expires_at,
+                'detail': (
+                    'We sent a verification code to your email address. '
+                    'Enter it to finish creating your account.'
+                ),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class VerifyEmailView(APIView):
+    """POST /api/accounts/verify-email/ - prove the address and get the account.
+
+    Expects {"email": ..., "code": ...}. On success the User is created, the
+    PendingSignup is deleted, and the response carries tokens so the caller
+    lands in the app rather than at a login form they just proved they do not
+    need.
+
+    201, because this is the request that creates the account.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = VerifyEmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        # Respond with the profile shape rather than the register payload,
-        # so the write-only password field is never echoed back.
+        # for_user() issues a fresh pair and, with the blacklist app installed,
+        # registers the refresh token as outstanding - so a later password
+        # change can revoke it like any other.
+        refresh = RefreshToken.for_user(user)
+
         return Response(
-            UserSerializer(user).data,
+            {
+                'user': UserSerializer(user).data,
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            },
             status=status.HTTP_201_CREATED,
         )
+
+
+class ResendOTPView(APIView):
+    """POST /api/accounts/resend-otp/ - email a fresh code for a live signup.
+
+    Expects {"email": ...}. The new code gets a full ten minutes, not whatever
+    was left of the old one: resending because the first mail never arrived
+    should not hand someone a code that dies in ninety seconds.
+
+    An expired signup is not revived here. It is a 400 telling the caller to
+    register again, because reviving it would make the expiry mean nothing.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ResendOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            pending = serializer.save()
+            deliver(send_signup_code, pending)
+
+        return Response(
+            {
+                'email': pending.email,
+                'expires_at': pending.expires_at,
+                'detail': 'We sent a new verification code to your email.',
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetRequestView(APIView):
+    """POST /api/accounts/password-reset/request/ - email a reset code.
+
+    Expects {"email": ...}. Unlike signup this acts on an account that already
+    exists, so the code hangs off a OneTimeCode row keyed to that User.
+
+    Asking twice reissues the code on the same row rather than putting a second
+    valid one in circulation - the model's UniqueConstraint makes that the only
+    available shape.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            code = serializer.save()
+            deliver(send_password_reset_code, code)
+
+        return Response(
+            {
+                'email': code.user.email,
+                'expires_at': code.expires_at,
+                'detail': 'We sent a password reset code to your email.',
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    """POST /api/accounts/password-reset/confirm/ - set a new password.
+
+    Expects {"email": ..., "code": ..., "new_password": ...}, and answers 204.
+
+    Revokes every refresh token the account holds, for the same reason
+    PasswordChangeView does: a reset is often a response to losing control of
+    the account, and it is worth nothing if the session that took it over
+    survives. Access tokens already issued stay valid until they expire - see
+    LogoutView.
+
+    No tokens are returned. Unlike verification, nothing here proves the caller
+    is at a browser that should be signed in - the code may have been read off
+    a screen - so they log in with the password they just set.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LogoutView(APIView):

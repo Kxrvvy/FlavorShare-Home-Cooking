@@ -1,29 +1,58 @@
-"""Tests for the role model and the shared permission classes.
+"""Tests for the role model, the shared permissions, and the signup flow.
 
-These are the security boundary for the whole project - every other app
-imports accounts.permissions - so the failure cases matter more than the
-success ones. Each class is exercised directly against a request rather than
-through a live endpoint, since the other apps' views do not exist yet.
+Two groups live here.
+
+The permission classes are the security boundary for the whole project - every
+other app imports accounts.permissions - so the failure cases matter more than
+the success ones. Those are exercised directly against a request rather than
+through a live endpoint.
+
+The signup, verification and password-reset tests are weighted the same way,
+because the things that would fail silently are all failures: a code that
+outlives its expiry, a pending row that survives a rejected email and blocks
+the next attempt, an account created before its address was proven, a password
+double-hashed into one nobody can use, a session that survives the reset meant
+to end it.
+
+resend.Emails.send is mocked throughout. The suite must never send mail or need
+a real API key - a green run says nothing about whether RESEND_API_KEY works,
+the same caveat recipes/tests.py carries about Cloudinary.
 """
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import resend
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AnonymousUser
-from django.test import SimpleTestCase, TestCase
+from django.db import IntegrityError, transaction
+from django.db.models import ProtectedError
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import User
+from .models import (
+    OTP_LENGTH,
+    OTP_TTL,
+    OneTimeCode,
+    PendingSignup,
+    User,
+    generate_otp_code,
+)
 from .permissions import (
     IsAdmin,
     IsOwnerOrReadOnly,
     IsRegisteredUser,
     IsRegisteredUserOrReadOnly,
 )
+
+PASSWORD = 'n0t-a-real-password'
+NEW_PASSWORD = 'als0-n0t-a-real-one'
 
 
 class PermissionTestCase(TestCase):
@@ -752,3 +781,748 @@ class NoStrayDrfAdminPermissionTests(SimpleTestCase):
             'Found in:\n  '
             + '\n  '.join(str(p) for p in offenders),
         )
+
+
+class OneTimeCodeModelTests(TestCase):
+    """The code, its expiry, and the two uniqueness rules."""
+
+    def pending(self, **overrides):
+        fields = {
+            'username': 'newcomer',
+            'email': 'newcomer@example.com',
+            'password_hash': make_password(PASSWORD),
+        }
+        fields.update(overrides)
+        return PendingSignup.objects.create(**fields)
+
+    def test_codes_are_six_digits(self):
+        """Zero-padded, so one draw in ten is not a five-character code."""
+        codes = [generate_otp_code() for _ in range(500)]
+
+        self.assertTrue(all(len(code) == OTP_LENGTH for code in codes))
+        self.assertTrue(all(code.isdigit() for code in codes))
+
+    def test_codes_are_not_drawn_from_a_narrow_range(self):
+        """A weak generator would repeat. `secrets` is why this holds."""
+        codes = {generate_otp_code() for _ in range(500)}
+
+        self.assertGreater(len(codes), 450)
+
+    def test_a_fresh_code_lasts_the_full_ttl(self):
+        remaining = (self.pending().expires_at - timezone.now()).total_seconds()
+
+        self.assertAlmostEqual(
+            remaining,
+            OTP_TTL.total_seconds(),
+            delta=10,
+        )
+
+    def test_a_code_is_spent_at_the_instant_it_expires(self):
+        """The boundary, because `>` and `>=` are easy to get backwards here."""
+        pending = self.pending()
+        pending.expires_at = timezone.now()
+        pending.save(update_fields=['expires_at'])
+
+        self.assertTrue(pending.is_expired)
+
+    def test_the_queryset_and_is_expired_agree(self):
+        """They read the same boundary from opposite sides.
+
+        If they ever disagree, a row is active in a query and expired in Python
+        - which is how a code becomes usable after it should have died.
+        """
+        pending = self.pending()
+        self.assertFalse(pending.is_expired)
+        self.assertEqual(PendingSignup.objects.active().count(), 1)
+        self.assertEqual(PendingSignup.objects.expired().count(), 0)
+
+        PendingSignup.objects.filter(pk=pending.pk).update(
+            expires_at=timezone.now() - OTP_TTL,
+        )
+        pending.refresh_from_db()
+
+        self.assertTrue(pending.is_expired)
+        self.assertEqual(PendingSignup.objects.active().count(), 0)
+        self.assertEqual(PendingSignup.objects.expired().count(), 1)
+
+    def test_regenerate_issues_a_new_code_with_a_full_expiry(self):
+        """A full TTL, not the remainder of the old one."""
+        pending = self.pending()
+        PendingSignup.objects.filter(pk=pending.pk).update(
+            expires_at=timezone.now() + OTP_TTL / 10,
+        )
+        pending.refresh_from_db()
+        before = pending.code
+
+        returned = pending.regenerate()
+        pending.refresh_from_db()
+
+        self.assertNotEqual(pending.code, before)
+        self.assertEqual(returned, pending.code)
+        remaining = (pending.expires_at - timezone.now()).total_seconds()
+        self.assertAlmostEqual(remaining, OTP_TTL.total_seconds(), delta=10)
+
+    def test_one_pending_signup_per_email(self):
+        self.pending()
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.pending(username='someone-else')
+
+    def test_two_pending_signups_may_share_a_username(self):
+        """No constraint, deliberately - an expired row would block it forever.
+
+        The serializer is what refuses a contested username, and only among
+        rows that are still live. See the note in CLAUDE.md.
+        """
+        self.pending()
+        self.pending(email='other@example.com')
+
+        self.assertEqual(
+            PendingSignup.objects.filter(username='newcomer').count(),
+            2,
+        )
+
+    def test_one_live_reset_code_per_user_and_purpose(self):
+        user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password=PASSWORD,
+        )
+        OneTimeCode.objects.create(
+            user=user,
+            purpose=OneTimeCode.Purpose.PASSWORD_RESET,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                OneTimeCode.objects.create(
+                    user=user,
+                    purpose=OneTimeCode.Purpose.PASSWORD_RESET,
+                )
+
+    def test_deleting_a_user_takes_their_codes(self):
+        """CASCADE, the one user FK in this project that is not PROTECT.
+
+        A reset code is meaningless without the account it unlocks, so it has
+        nothing to protect.
+        """
+        user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password=PASSWORD,
+        )
+        OneTimeCode.objects.create(
+            user=user,
+            purpose=OneTimeCode.Purpose.PASSWORD_RESET,
+        )
+
+        user.delete()
+
+        self.assertFalse(OneTimeCode.objects.exists())
+
+
+class CreateUserFromHashTests(TestCase):
+    """The manager method that carries a pre-hashed password onto a User."""
+
+    def setUp(self):
+        self.hash = make_password(PASSWORD)
+
+    def test_the_hash_is_stored_untouched(self):
+        user = User.objects.create_user_from_hash(
+            username='newcomer',
+            email='newcomer@example.com',
+            password_hash=self.hash,
+        )
+
+        self.assertEqual(user.password, self.hash)
+
+    def test_the_original_password_still_logs_in(self):
+        """The whole point: verification must not break the password."""
+        User.objects.create_user_from_hash(
+            username='newcomer',
+            email='newcomer@example.com',
+            password_hash=self.hash,
+        )
+
+        user = User.objects.get(username='newcomer')
+        self.assertTrue(user.check_password(PASSWORD))
+
+    def test_create_user_would_have_double_hashed_it(self):
+        """Why the method exists at all.
+
+        Passing a stored hash to create_user() raises no error and produces an
+        account nobody can ever log into. Asserted so the trap stays visible.
+        """
+        user = User.objects.create_user(
+            username='doomed',
+            email='doomed@example.com',
+            password=self.hash,
+        )
+
+        self.assertFalse(user.check_password(PASSWORD))
+
+    def test_a_plaintext_password_is_refused(self):
+        """identify_hasher() is what makes the dangerous misuse loud."""
+        with self.assertRaises(ValueError):
+            User.objects.create_user_from_hash(
+                username='newcomer',
+                email='newcomer@example.com',
+                password_hash=PASSWORD,
+            )
+
+        self.assertFalse(User.objects.exists())
+
+    def test_a_missing_hash_is_refused(self):
+        with self.assertRaises(ValueError):
+            User.objects.create_user_from_hash(
+                username='newcomer',
+                email='newcomer@example.com',
+                password_hash='',
+            )
+
+
+@override_settings(
+    RESEND_API_KEY='re_test_key',
+    RESEND_FROM_EMAIL='FlavorShare <test@example.com>',
+)
+class SignupFlowTestCase(APITestCase):
+    """Base for the endpoint tests: a working key and a mocked SDK.
+
+    The mock is what keeps the suite from sending mail. It also lets every test
+    below assert on what *would* have been sent, which is the only way to check
+    that the code in the email is the code in the database.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.register_url = reverse('register')
+        cls.verify_url = reverse('verify-email')
+        cls.resend_url = reverse('resend-otp')
+        cls.reset_request_url = reverse('password-reset-request')
+        cls.reset_confirm_url = reverse('password-reset-confirm')
+
+    def setUp(self):
+        patcher = patch('resend.Emails.send', return_value={'id': 'test'})
+        self.send = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def payload(self, **overrides):
+        data = {
+            'username': 'newcomer',
+            'email': 'newcomer@example.com',
+            'password': PASSWORD,
+        }
+        data.update(overrides)
+        return data
+
+    def register(self, **overrides):
+        return self.client.post(
+            self.register_url,
+            self.payload(**overrides),
+            format='json',
+        )
+
+    def emailed(self):
+        """The payload handed to Resend by the most recent send."""
+        return self.send.call_args[0][0]
+
+    def expire(self, row):
+        type(row).objects.filter(pk=row.pk).update(
+            expires_at=timezone.now() - OTP_TTL,
+        )
+        row.refresh_from_db()
+        return row
+
+
+class RegisterTests(SignupFlowTestCase):
+    def test_register_creates_no_account(self):
+        """The premise of the whole design: unverified users do not exist."""
+        self.register()
+
+        self.assertFalse(User.objects.filter(email='newcomer@example.com'))
+        self.assertEqual(PendingSignup.objects.count(), 1)
+
+    def test_register_is_accepted_not_created(self):
+        response = self.register()
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(
+            sorted(response.data),
+            ['detail', 'email', 'expires_at'],
+        )
+
+    def test_the_response_never_carries_the_code(self):
+        """It goes to the address being proven, and nowhere else."""
+        response = self.register()
+        code = PendingSignup.objects.get().code
+
+        self.assertNotIn('code', response.data)
+        self.assertNotIn(code, str(response.data))
+
+    def test_the_password_is_stored_hashed(self):
+        self.register()
+        stored = PendingSignup.objects.get().password_hash
+
+        self.assertNotEqual(stored, PASSWORD)
+        self.assertTrue(stored.startswith('pbkdf2_'))
+
+    def test_dietary_preferences_are_kept_for_the_account(self):
+        self.register(dietary_preferences='vegan')
+
+        self.assertEqual(
+            PendingSignup.objects.get().dietary_preferences,
+            'vegan',
+        )
+
+    def test_the_emailed_code_is_the_stored_code(self):
+        self.register()
+        pending = PendingSignup.objects.get()
+
+        self.assertEqual(self.emailed()['to'], ['newcomer@example.com'])
+        self.assertIn(pending.code, self.emailed()['text'])
+        self.assertIn(pending.code, self.emailed()['html'])
+
+    def test_an_email_already_registered_is_refused(self):
+        User.objects.create_user(
+            username='someone',
+            email='newcomer@example.com',
+            password=PASSWORD,
+        )
+
+        response = self.register()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('email', response.data)
+        self.assertFalse(PendingSignup.objects.exists())
+
+    def test_a_username_already_registered_is_refused(self):
+        User.objects.create_user(
+            username='newcomer',
+            email='someone@example.com',
+            password=PASSWORD,
+        )
+
+        response = self.register()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('username', response.data)
+
+    def test_a_username_held_by_another_live_signup_is_refused(self):
+        """The race the design exists to close.
+
+        Checking only the email here would let two people hold one username
+        through their pending windows, and whoever verified second would fail
+        with nothing to do about it.
+        """
+        self.register()
+
+        response = self.register(email='other@example.com')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('username', response.data)
+
+    def test_a_username_held_by_an_expired_signup_is_free(self):
+        self.register()
+        self.expire(PendingSignup.objects.get())
+
+        response = self.register(email='other@example.com')
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+
+    def test_registering_again_reissues_the_code_on_the_same_row(self):
+        self.register()
+        pending = PendingSignup.objects.get()
+        before = pending.code
+
+        response = self.register()
+        pending.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(PendingSignup.objects.count(), 1)
+        self.assertNotEqual(pending.code, before)
+        self.assertIn(pending.code, self.emailed()['text'])
+
+    def test_registering_again_after_expiry_starts_over(self):
+        self.register()
+        stale = self.expire(PendingSignup.objects.get())
+
+        self.register()
+
+        self.assertEqual(PendingSignup.objects.count(), 1)
+        self.assertNotEqual(PendingSignup.objects.get().pk, stale.pk)
+
+    def test_a_weak_password_is_refused(self):
+        response = self.register(password='123')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(PendingSignup.objects.exists())
+
+
+class RegisterEmailFailureTests(SignupFlowTestCase):
+    """What happens when the code cannot be delivered.
+
+    The rollback is the point. A pending row that survives a failed send would
+    sit in the way of the next attempt while holding a code nobody received.
+    """
+
+    @override_settings(RESEND_API_KEY='')
+    def test_a_missing_api_key_is_503_and_leaves_nothing_behind(self):
+        response = self.register()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        self.assertFalse(self.send.called)
+        self.assertFalse(PendingSignup.objects.exists())
+
+    def test_a_refused_message_is_502_and_leaves_nothing_behind(self):
+        self.send.side_effect = resend.exceptions.ResendError(
+            code=422,
+            message='domain not verified',
+            error_type='validation_error',
+            suggested_action='verify the domain',
+        )
+
+        response = self.register()
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertFalse(PendingSignup.objects.exists())
+
+    def test_a_failed_resend_leaves_the_previous_code_usable(self):
+        """Rolling back a reissue has to restore the code already emailed."""
+        self.register()
+        original = PendingSignup.objects.get().code
+
+        self.send.side_effect = resend.exceptions.ResendError(
+            code=429,
+            message='rate limited',
+            error_type='rate_limit_error',
+            suggested_action='wait',
+        )
+        response = self.client.post(
+            self.resend_url,
+            {'email': 'newcomer@example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(PendingSignup.objects.get().code, original)
+
+
+class VerifyEmailTests(SignupFlowTestCase):
+    def setUp(self):
+        super().setUp()
+        self.register(dietary_preferences='vegan')
+        self.pending = PendingSignup.objects.get()
+
+    def verify(self, code=None, email='newcomer@example.com'):
+        return self.client.post(
+            self.verify_url,
+            {'email': email, 'code': code or self.pending.code},
+            format='json',
+        )
+
+    def test_a_correct_code_creates_the_account(self):
+        response = self.verify()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email='newcomer@example.com')
+        self.assertEqual(user.username, 'newcomer')
+        self.assertEqual(user.role, User.Role.REGISTERED)
+        self.assertEqual(user.dietary_preferences, 'vegan')
+
+    def test_the_password_from_registration_works(self):
+        """The double-hash trap, checked through the real flow."""
+        self.verify()
+
+        user = User.objects.get(email='newcomer@example.com')
+        self.assertTrue(user.check_password(PASSWORD))
+
+    def test_the_response_carries_usable_tokens(self):
+        """Verifying signs you in - no second trip to a login form."""
+        response = self.verify()
+
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'Bearer {response.data["access"]}',
+        )
+        profile = self.client.get(reverse('me'))
+        self.assertEqual(profile.status_code, status.HTTP_200_OK)
+        self.assertEqual(profile.data['username'], 'newcomer')
+
+    def test_the_pending_row_is_consumed(self):
+        self.verify()
+
+        self.assertFalse(PendingSignup.objects.exists())
+
+    def test_a_wrong_code_is_refused(self):
+        wrong = '000000' if self.pending.code != '000000' else '111111'
+
+        response = self.verify(code=wrong)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(username='newcomer').exists())
+
+    def test_an_expired_code_is_refused(self):
+        self.expire(self.pending)
+
+        response = self.verify()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(username='newcomer').exists())
+        # The row survives; only registering again clears it.
+        self.assertTrue(PendingSignup.objects.exists())
+
+    def test_an_unknown_address_is_refused(self):
+        response = self.verify(email='stranger@example.com')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_code_cannot_be_replayed(self):
+        code = self.pending.code
+        self.verify()
+
+        response = self.verify(code=code)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(User.objects.filter(username='newcomer').count(), 1)
+
+    def test_a_username_taken_during_the_window_is_reported(self):
+        """The documented race, from the losing side.
+
+        A readable 400 naming the username, not an IntegrityError.
+        """
+        User.objects.create_user(
+            username='newcomer',
+            email='faster@example.com',
+            password=PASSWORD,
+        )
+
+        response = self.verify()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('username', response.data)
+
+
+class ResendOTPTests(SignupFlowTestCase):
+    def setUp(self):
+        super().setUp()
+        self.register()
+        self.pending = PendingSignup.objects.get()
+
+    def resend(self, email='newcomer@example.com'):
+        return self.client.post(
+            self.resend_url,
+            {'email': email},
+            format='json',
+        )
+
+    def test_a_new_code_is_issued_with_a_full_expiry(self):
+        before = self.pending.code
+        PendingSignup.objects.filter(pk=self.pending.pk).update(
+            expires_at=timezone.now() + OTP_TTL / 10,
+        )
+
+        response = self.resend()
+        self.pending.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotEqual(self.pending.code, before)
+        remaining = (
+            self.pending.expires_at - timezone.now()
+        ).total_seconds()
+        self.assertAlmostEqual(
+            remaining,
+            OTP_TTL.total_seconds(),
+            delta=10,
+        )
+
+    def test_the_new_code_is_the_one_emailed(self):
+        self.resend()
+        self.pending.refresh_from_db()
+
+        self.assertIn(self.pending.code, self.emailed()['text'])
+
+    def test_the_old_code_stops_working(self):
+        before = self.pending.code
+        self.resend()
+
+        response = self.client.post(
+            self.verify_url,
+            {'email': 'newcomer@example.com', 'code': before},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_an_unknown_address_is_refused(self):
+        response = self.resend(email='stranger@example.com')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_an_expired_signup_is_not_revived(self):
+        """Reviving it here would make the expiry mean nothing."""
+        self.expire(self.pending)
+        before = self.pending.code
+
+        response = self.resend()
+        self.pending.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.pending.code, before)
+
+
+class PasswordResetTests(SignupFlowTestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password=PASSWORD,
+        )
+
+    def request_reset(self, email='cook@example.com'):
+        return self.client.post(
+            self.reset_request_url,
+            {'email': email},
+            format='json',
+        )
+
+    def confirm(self, code=None, email='cook@example.com',
+                new_password=NEW_PASSWORD):
+        if code is None:
+            code = OneTimeCode.objects.get(user=self.user).code
+        return self.client.post(
+            self.reset_confirm_url,
+            {'email': email, 'code': code, 'new_password': new_password},
+            format='json',
+        )
+
+    def test_a_request_emails_a_code_to_the_account(self):
+        response = self.request_reset()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        code = OneTimeCode.objects.get(user=self.user)
+        self.assertEqual(code.purpose, OneTimeCode.Purpose.PASSWORD_RESET)
+        self.assertEqual(self.emailed()['to'], ['cook@example.com'])
+        self.assertIn(code.code, self.emailed()['text'])
+
+    def test_the_response_never_carries_the_code(self):
+        response = self.request_reset()
+        code = OneTimeCode.objects.get(user=self.user).code
+
+        self.assertNotIn(code, str(response.data))
+
+    def test_asking_twice_reissues_on_the_same_row(self):
+        """Two live codes would double the guessing surface."""
+        self.request_reset()
+        code = OneTimeCode.objects.get(user=self.user)
+        before = code.code
+
+        self.request_reset()
+        code.refresh_from_db()
+
+        self.assertEqual(OneTimeCode.objects.count(), 1)
+        self.assertNotEqual(code.code, before)
+
+    def test_an_unknown_address_is_refused(self):
+        response = self.request_reset(email='stranger@example.com')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(OneTimeCode.objects.exists())
+
+    def test_a_deactivated_account_is_refused(self):
+        """Deactivation is this project's "removed" - a reset would be a way in."""
+        self.user.is_active = False
+        self.user.save(update_fields=['is_active'])
+
+        response = self.request_reset()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(OneTimeCode.objects.exists())
+
+    def test_confirming_sets_the_new_password(self):
+        self.request_reset()
+
+        response = self.confirm()
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertTrue(self.user.check_password(NEW_PASSWORD))
+        self.assertFalse(self.user.check_password(PASSWORD))
+
+    def test_the_code_is_consumed(self):
+        self.request_reset()
+
+        self.confirm()
+
+        self.assertFalse(OneTimeCode.objects.exists())
+
+    def test_confirming_revokes_existing_sessions(self):
+        """A reset answers a takeover; the intruder's session has to end.
+
+        Same rule PasswordChangeTests covers for a deliberate change.
+        """
+        refresh = RefreshToken.for_user(self.user)
+        self.request_reset()
+
+        self.confirm()
+
+        response = self.client.post(
+            reverse('token_refresh'),
+            {'refresh': str(refresh)},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_a_wrong_code_is_refused(self):
+        self.request_reset()
+        real = OneTimeCode.objects.get(user=self.user).code
+        wrong = '000000' if real != '000000' else '111111'
+
+        response = self.confirm(code=wrong)
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(self.user.check_password(PASSWORD))
+
+    def test_an_expired_code_is_refused(self):
+        self.request_reset()
+        self.expire(OneTimeCode.objects.get(user=self.user))
+
+        response = self.confirm()
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(self.user.check_password(PASSWORD))
+
+    def test_confirming_without_a_request_is_refused(self):
+        response = self.confirm(code='123456')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_weak_new_password_is_refused(self):
+        self.request_reset()
+
+        response = self.confirm(new_password='123')
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(self.user.check_password(PASSWORD))
+        # The code survives a rejected attempt, so a real typo is recoverable.
+        self.assertTrue(OneTimeCode.objects.exists())
+
+    def test_a_code_cannot_be_replayed(self):
+        self.request_reset()
+        code = OneTimeCode.objects.get(user=self.user).code
+        self.confirm()
+
+        response = self.confirm(code=code, new_password='a-third-passw0rd')
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(self.user.check_password(NEW_PASSWORD))

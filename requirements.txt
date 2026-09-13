@@ -26,10 +26,11 @@ cloudinary>=1.40.0
 # External API calls (Nutrition API, Email service)
 requests>=2.31.0
 
-# Email service (pick one based on what you choose)
-sendgrid>=6.11.0
-# OR
-# resend>=0.8.0
+# Email service. Resend, per CLAUDE.md - the choice is made, so this is no
+# longer a "pick one". SendGrid is left here commented only so the alternative
+# that was considered stays on the record.
+resend>=2.0
+# sendgrid>=6.11.0
 
 # Filtering support for DRF (search/filter/sort/pagination requirement)
 django-filter>=24.0
