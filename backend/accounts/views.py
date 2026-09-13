@@ -67,7 +67,7 @@ class EmailUnavailable(APIException):
 
 
 class EmailUndeliverable(APIException):
-    """502 - Resend was reachable and refused the message."""
+    """502 - the email provider was reachable and refused the message."""
 
     status_code = status.HTTP_502_BAD_GATEWAY
 

@@ -102,8 +102,8 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | `CLOUDINARY_CLOUD_NAME` | for uploads | `dxxxxxxxx` | Cloudinary account to upload recipe photos to. |
 | `CLOUDINARY_API_KEY` | for uploads | `123456789012345` | Public half of the Cloudinary credentials. |
 | `CLOUDINARY_API_SECRET` | for uploads | *from your dashboard* | Secret half. Server-side only — never put this in the frontend. |
-| `RESEND_API_KEY` | for signup & reset | `re_xxxxxxxxxxxx` | Sends verification and password-reset codes. Server-side only. |
-| `RESEND_FROM_EMAIL` | no | `FlavorShare <onboarding@resend.dev>` | The From address. Defaults to Resend's sandbox sender. |
+| `BREVO_API_KEY` | for signup & reset | `xkeysib-xxxxxxxx` | Sends verification and password-reset codes. Server-side only. |
+| `BREVO_FROM_EMAIL` | for signup & reset | `FlavorShare <you@gmail.com>` | The From address. Must be a real mailbox you control — see below. |
 
 The three `CLOUDINARY_*` keys are needed only for image uploads. Leave them
 out and everything else runs; `POST /api/recipes/images/upload/` answers
@@ -111,18 +111,29 @@ out and everything else runs; `POST /api/recipes/images/upload/` answers
 dashboard at <https://console.cloudinary.com> under **Account Details** — the
 free tier is enough for this project.
 
-`RESEND_API_KEY` works the same way: leave it out and everything else runs,
-but `POST /api/accounts/register/` and the password-reset request answer `503`
-saying it is missing. Since **an account is only created once its email is
-verified**, signup cannot complete without this key — so you need it to
-register a user through the API. Get one at <https://resend.com> under **API
-Keys**.
+The two `BREVO_*` keys work the same way: leave them out and everything else
+runs, but `POST /api/accounts/register/` and the password-reset request answer
+`503` saying which one is missing. Since **an account is only created once its
+email is verified**, signup cannot complete without them — so you need both to
+register a user through the API at all. Get a key at <https://brevo.com> under
+**SMTP & API → API Keys**; the free tier allows 300 emails a day and asks for no
+card.
 
-`RESEND_FROM_EMAIL` defaults to Resend's sandbox sender
-(`onboarding@resend.dev`), which needs no domain setup but **only delivers to
-the email address that owns the Resend account**. That is fine while
-developing; before showing signup to anyone else, verify a domain with Resend
-and set this to an address on it.
+`BREVO_FROM_EMAIL` takes either `you@gmail.com` or
+`FlavorShare <you@gmail.com>` — the code splits the two forms apart, so use
+whichever reads better.
+
+**It has to be a real mailbox you control.** Without a verified sending domain,
+Brevo only accepts a From address it can tie to your account, so an invented one
+like `no-reply@flavorshare.app` is rejected. Use the address you signed up with,
+or add another under **Senders** and click the confirmation link Brevo emails
+you.
+
+Mail sent this way reaches **any** recipient, which is why Brevo replaced Resend
+here — Resend's unverified sandbox sender could only deliver to the account
+owner's own inbox, so nobody else could ever receive a code. The tradeoff is
+that mail from an unverified domain is likelier to land in spam, so check the
+spam folder before assuming something is broken.
 
 Generate your own `SECRET_KEY`:
 
@@ -142,7 +153,8 @@ CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_API_SECRET=your-api-secret
 
 # Needed to register a user at all - signup sends a verification code
-RESEND_API_KEY=your-resend-key
+BREVO_API_KEY=your-brevo-key
+BREVO_FROM_EMAIL=FlavorShare <you@gmail.com>
 ```
 
 The three optional keys have working defaults in `settings.py`; set them only
