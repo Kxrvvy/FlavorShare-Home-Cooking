@@ -14,16 +14,16 @@ the next attempt, an account created before its address was proven, a password
 double-hashed into one nobody can use, a session that survives the reset meant
 to end it.
 
-resend.Emails.send is mocked throughout. The suite must never send mail or need
-a real API key - a green run says nothing about whether RESEND_API_KEY works,
-the same caveat recipes/tests.py carries about Cloudinary.
+Brevo's send_transac_email is mocked throughout. The suite must never send mail
+or need a real API key - a green run says nothing about whether BREVO_API_KEY
+works, the same caveat recipes/tests.py carries about Cloudinary.
 """
 
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import resend
+from brevo.core import ApiError
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AnonymousUser
@@ -982,9 +982,18 @@ class CreateUserFromHashTests(TestCase):
             )
 
 
+#: Where the Brevo SDK's send lives. Patched on the client class rather than on
+#: a Brevo instance, because accounts.emails.send_email() constructs a fresh
+#: client per call and there is no shared instance to reach.
+BREVO_SEND = (
+    'brevo.transactional_emails.client'
+    '.TransactionalEmailsClient.send_transac_email'
+)
+
+
 @override_settings(
-    RESEND_API_KEY='re_test_key',
-    RESEND_FROM_EMAIL='FlavorShare <test@example.com>',
+    BREVO_API_KEY='test-key',
+    BREVO_FROM_EMAIL='FlavorShare <test@example.com>',
 )
 class SignupFlowTestCase(APITestCase):
     """Base for the endpoint tests: a working key and a mocked SDK.
@@ -1003,7 +1012,10 @@ class SignupFlowTestCase(APITestCase):
         cls.reset_confirm_url = reverse('password-reset-confirm')
 
     def setUp(self):
-        patcher = patch('resend.Emails.send', return_value={'id': 'test'})
+        patcher = patch(
+            BREVO_SEND,
+            return_value=SimpleNamespace(message_id='<test@brevo>'),
+        )
         self.send = patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -1024,8 +1036,13 @@ class SignupFlowTestCase(APITestCase):
         )
 
     def emailed(self):
-        """The payload handed to Resend by the most recent send."""
-        return self.send.call_args[0][0]
+        """The payload handed to Brevo by the most recent send.
+
+        Keyword arguments, not a single dict - send_transac_email() takes them
+        keyword-only, so the keys here are Brevo's field names: `to` is a list
+        of {'email': ...}, and the bodies are text_content and html_content.
+        """
+        return self.send.call_args.kwargs
 
     def expire(self, row):
         type(row).objects.filter(pk=row.pk).update(
@@ -1079,9 +1096,9 @@ class RegisterTests(SignupFlowTestCase):
         self.register()
         pending = PendingSignup.objects.get()
 
-        self.assertEqual(self.emailed()['to'], ['newcomer@example.com'])
-        self.assertIn(pending.code, self.emailed()['text'])
-        self.assertIn(pending.code, self.emailed()['html'])
+        self.assertEqual(self.emailed()['to'], [{'email': 'newcomer@example.com'}])
+        self.assertIn(pending.code, self.emailed()['text_content'])
+        self.assertIn(pending.code, self.emailed()['html_content'])
 
     def test_an_email_already_registered_is_refused(self):
         User.objects.create_user(
@@ -1141,7 +1158,7 @@ class RegisterTests(SignupFlowTestCase):
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(PendingSignup.objects.count(), 1)
         self.assertNotEqual(pending.code, before)
-        self.assertIn(pending.code, self.emailed()['text'])
+        self.assertIn(pending.code, self.emailed()['text_content'])
 
     def test_registering_again_after_expiry_starts_over(self):
         self.register()
@@ -1166,7 +1183,7 @@ class RegisterEmailFailureTests(SignupFlowTestCase):
     sit in the way of the next attempt while holding a code nobody received.
     """
 
-    @override_settings(RESEND_API_KEY='')
+    @override_settings(BREVO_API_KEY='')
     def test_a_missing_api_key_is_503_and_leaves_nothing_behind(self):
         response = self.register()
 
@@ -1178,11 +1195,10 @@ class RegisterEmailFailureTests(SignupFlowTestCase):
         self.assertFalse(PendingSignup.objects.exists())
 
     def test_a_refused_message_is_502_and_leaves_nothing_behind(self):
-        self.send.side_effect = resend.exceptions.ResendError(
-            code=422,
-            message='domain not verified',
-            error_type='validation_error',
-            suggested_action='verify the domain',
+        self.send.side_effect = ApiError(
+            status_code=400,
+            body={'code': 'invalid_parameter',
+                  'message': 'sender email is not valid'},
         )
 
         response = self.register()
@@ -1195,11 +1211,9 @@ class RegisterEmailFailureTests(SignupFlowTestCase):
         self.register()
         original = PendingSignup.objects.get().code
 
-        self.send.side_effect = resend.exceptions.ResendError(
-            code=429,
-            message='rate limited',
-            error_type='rate_limit_error',
-            suggested_action='wait',
+        self.send.side_effect = ApiError(
+            status_code=429,
+            body={'code': 'too_many_requests', 'message': 'rate limited'},
         )
         response = self.client.post(
             self.resend_url,
@@ -1345,7 +1359,7 @@ class ResendOTPTests(SignupFlowTestCase):
         self.resend()
         self.pending.refresh_from_db()
 
-        self.assertIn(self.pending.code, self.emailed()['text'])
+        self.assertIn(self.pending.code, self.emailed()['text_content'])
 
     def test_the_old_code_stops_working(self):
         before = self.pending.code
@@ -1408,8 +1422,8 @@ class PasswordResetTests(SignupFlowTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         code = OneTimeCode.objects.get(user=self.user)
         self.assertEqual(code.purpose, OneTimeCode.Purpose.PASSWORD_RESET)
-        self.assertEqual(self.emailed()['to'], ['cook@example.com'])
-        self.assertIn(code.code, self.emailed()['text'])
+        self.assertEqual(self.emailed()['to'], [{'email': 'cook@example.com'}])
+        self.assertIn(code.code, self.emailed()['text_content'])
 
     def test_the_response_never_carries_the_code(self):
         response = self.request_reset()

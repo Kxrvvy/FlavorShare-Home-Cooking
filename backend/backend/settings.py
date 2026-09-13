@@ -204,27 +204,30 @@ CLOUDINARY_STORAGE = {
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
-# Resend
-# https://resend.com/docs/api-reference/emails/send-email
+# Brevo
+# https://developers.brevo.com/reference/sendtransacemail
 #
 # Outbound email for signup verification codes and password resets, sent from
 # accounts/emails.py. Only the API key lives on this side; the frontend never
 # sees it, and nothing about a code is ever returned in an API response.
 #
 # Blank by default so a fresh clone still starts and the test suite still runs -
-# the suite mocks the SDK throughout and never needs a real key. accounts/emails.py
-# raises EmailNotConfigured when the key is missing, which the views turn into a
-# readable 503 rather than an error from inside the SDK. README.md lists the keys.
-RESEND_API_KEY = env('RESEND_API_KEY', default='')
+# the suite mocks the SDK throughout and never needs a real key.
+# accounts/emails.py raises EmailNotConfigured when either setting is missing,
+# which the views turn into a readable 503 rather than an error from inside the
+# SDK. README.md lists both.
+BREVO_API_KEY = env('BREVO_API_KEY', default='')
 
-# The From address. Resend only accepts a domain you have verified with them;
-# onboarding@resend.dev is their sandbox sender, which works without a domain
-# but can only deliver to the account owner's own address. Fine for development,
-# has to change before the demo goes to anyone else.
-RESEND_FROM_EMAIL = env(
-    'RESEND_FROM_EMAIL',
-    default='FlavorShare <onboarding@resend.dev>',
-)
+# The From address, as either "you@example.com" or "Name <you@example.com>" -
+# accounts/emails.py splits it with email.utils.parseaddr, so both work.
+#
+# No default, unlike the Resend setup this replaced. Resend shipped a sandbox
+# sender that worked out of the box but could only deliver to the account
+# owner's own inbox; Brevo has no equivalent, and without a verified domain it
+# requires the From address to be a real mailbox you control. There is no value
+# that would work for an arbitrary clone, so a missing one is treated as
+# "not configured" rather than papered over with a guess.
+BREVO_FROM_EMAIL = env('BREVO_FROM_EMAIL', default='')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

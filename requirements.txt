@@ -26,10 +26,20 @@ cloudinary>=1.40.0
 # External API calls (Nutrition API, Email service)
 requests>=2.31.0
 
-# Email service. Resend, per CLAUDE.md - the choice is made, so this is no
-# longer a "pick one". SendGrid is left here commented only so the alternative
-# that was considered stays on the record.
-resend>=2.0
+# Email service. Brevo, per CLAUDE.md.
+#
+# The distribution is `brevo-python`; the package it installs is `brevo`, so the
+# import reads `from brevo import Brevo`. Worth stating because neither name is
+# guessable from the other, there is no `brevo` distribution on PyPI at all, and
+# `sib-api-v3-sdk` is the legacy Sendinblue SDK rather than this one.
+#
+# Resend came first and was dropped: its unverified sandbox sender delivers only
+# to the Resend account owner's own inbox - a hard rejection, not a spam-folder
+# problem - so nobody else could ever receive a signup code without a verified
+# domain. Brevo's free tier sends to any real recipient without one. The two
+# alternatives stay commented so the path we took is on the record.
+brevo-python>=5.0
+# resend>=2.0
 # sendgrid>=6.11.0
 
 # Filtering support for DRF (search/filter/sort/pagination requirement)

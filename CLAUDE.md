@@ -98,7 +98,7 @@ role, see User Roles below*:
 9. **Nutrition Information** — auto-fetched nutrition facts per recipe
    via an external nutrition API (deferred — not yet integrated)
 10. **Email Notifications** — new comment/rating alerts, meal plan
-    reminders via **Resend**
+    reminders via **Brevo**
 
 ---
 
@@ -114,7 +114,7 @@ role, see User Roles below*:
   into connected tables (proper PK/FK relationships).
 - **External Integrations**
   - Nutrition API — calculates calories/macros per recipe (not yet chosen/integrated)
-  - Resend — sends email notifications
+  - Brevo — sends email notifications
 - **Image Handling** — Cloudinary stores and resizes uploaded photos.
 - **Security Layer** — hashed passwords, role-based access control,
   input validation, safe session management (Django defaults handle
@@ -128,7 +128,7 @@ role, see User Roles below*:
 - Ratings & Reviews → own tables, linked to both User and Recipe
 - Meal Plan Generator → pulls from a user's saved/published recipes
 - Nutrition Info → fetched from external API when a recipe is created/viewed (pending)
-- Email Notifications → triggered by events (new comment, new rating), sent via Resend
+- Email Notifications → triggered by events (new comment, new rating), sent via Brevo
 - Admin Dashboard & Moderation → Admin-only; pulls stats directly from the database
 
 ---
@@ -229,7 +229,7 @@ correct and complete as of the last review.
 - **Database:** MySQL
 - **Auth:** JWT (`djangorestframework-simplejwt`)
 - **Image Storage:** Cloudinary
-- **Email Service:** Resend
+- **Email Service:** Brevo (`brevo-python`; was Resend — see below)
 - **Nutrition API:** not yet chosen (deferred)
 - **Hosting:** Vercel (frontend) + **Render** (backend, free tier)
 
@@ -238,11 +238,33 @@ correct and complete as of the last review.
   but does **not** block outbound API calls — acceptable tradeoff.
 - PythonAnywhere was considered but rejected: free tier restricts
   outbound internet access to an allowlist, which would likely block
-  Resend and any future nutrition API calls.
+  Brevo and any future nutrition API calls.
 - Railway and Fly.io were considered but ruled out due to unclear/
   no longer fully free tiers.
 - **Action item before demo:** ping the Render backend a minute or two
   before presenting/grading so it's "warm" (not mid cold-start).
+
+### Why Brevo, after starting with Resend
+- Resend was integrated first and removed. On its free tier, without a verified
+  sending domain, it only delivers to the **Resend account owner's own inbox** —
+  a hard rejection from their API, not a spam-folder problem. Since an account
+  is only created once its email is verified, that meant nobody but the key's
+  owner could ever finish signing up: no teammate, no instructor, no grader.
+- Buying and verifying a domain would fix it and is out of scope for this
+  project, so the provider changed instead.
+- Brevo's free tier sends to **any** real recipient with no domain setup —
+  300 emails/day, no card required. The tradeoff is spam-folder risk rather than
+  an outright block, which is the better problem to have here.
+- **Constraint to remember:** without a verified domain Brevo still requires the
+  From address to be a real mailbox you control, so `BREVO_FROM_EMAIL` cannot be
+  an invented address like `no-reply@flavorshare.app`. README.md explains how to
+  add and confirm one.
+- SDK: the `brevo-python` distribution, which installs the package `brevo`
+  (`from brevo import Brevo`). Not `sib-api-v3-sdk`, which is the legacy
+  Sendinblue SDK, and there is no `brevo` distribution on PyPI at all.
+- Only the transport changed. `accounts/emails.py` keeps the same two
+  exceptions, the same public functions and the same message wording, and the
+  views still map them to 503 and 502.
 
 ### Why Django over FastAPI (rationale, for reference)
 - Team has mixed experience; Django's structure/conventions (ORM,
@@ -272,11 +294,41 @@ correct and complete as of the last review.
 | Auth & security (hashing, RBAC, input validation, SQLi/XSS protection, sessions) | Django defaults + DRF |
 | Dashboard & reporting | Admin Dashboard feature |
 | Search, filter, sort, pagination | `django-filter` + DRF pagination |
-| External API integration | Resend (email) confirmed; nutrition API deferred |
+| External API integration | Cloudinary (images) and Brevo (email) both integrated; nutrition API deferred |
 
 **Open item:** confirm with instructor whether Django counts as an
 "approved server-side technology" (rubric explicitly names PHP as the
 default example).
+
+### Search, filter and sort — two decisions worth knowing
+
+Built in `recipes/filters.py` and wired into `RecipeViewSet`. Both of the
+following look like oversights and are not, so they are recorded here as well
+as in the code.
+
+- **Repeated `tag` and `ingredient` values mean OR, not AND.**
+  `?tag=vegan&tag=gluten-free` returns recipes carrying *either* — it widens
+  the result rather than narrowing it. Different parameters still combine with
+  AND, so `?tag=vegan&cuisine_type=thai` means both. A test asserts that a
+  recipe matching only one of two supplied tags is still returned, which is
+  what will fail if someone later "corrects" this into AND.
+- **Nothing calls `.distinct()`, deliberately.** Filtering across tags or
+  ingredients joins one recipe to several rows and would normally duplicate it.
+  Two things already prevent that: the aggregate annotations in
+  `RecipeViewSet.get_queryset()` put a `GROUP BY` on `Recipe.recipe_id`, and
+  DRF's `SearchFilter` deduplicates its own joins by rewriting the query to
+  `base.filter(Exists(...))`. A `.distinct()` on top would be redundant and
+  would cost a pass over every listing.
+
+  The consequence: **`RecipeFilterSet` is not self-contained.** Applied to a
+  queryset with no aggregate annotation it *does* return duplicate rows —
+  measured, and asserted in `FilterSetInIsolationTests`. Anything that reuses
+  it elsewhere has to annotate or call `.distinct()` itself.
+
+  Related, and the reason the `order_by()` in `get_queryset()` must not be
+  removed: a `GROUP BY` also discards the model's `Meta.ordering` entirely, so
+  that explicit `order_by` is the only thing ordering the recipe list. Dropping
+  it makes pagination silently repeat and skip rows.
 
 ---
 
@@ -331,7 +383,7 @@ Each app follows the same internal structure:
 4. **Person 4 — Meal Plan + Nutrition**
    `MealPlan`, `MealPlanEntry`, `NutritionInfo`; meal plan generator; nutrition API integration (pending).
 5. **Person 5 — Admin, Activity & Email**
-   `Activity` logging, admin dashboard endpoints, Resend integration, moderation actions.
+   `Activity` logging, admin dashboard endpoints, email integration, moderation actions.
 
 ---
 
@@ -343,7 +395,7 @@ Each app follows the same internal structure:
 - Database: MySQL
 - Auth: JWT
 - Image storage: Cloudinary
-- Email service: Resend
+- Email service: Brevo (switched from Resend)
 - Hosting: Vercel (frontend) + Render (backend)
 - Full ERD (15 tables) — built and reviewed
 - 5-app Django structure — built and reviewed
