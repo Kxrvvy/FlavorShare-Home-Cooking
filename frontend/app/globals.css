@@ -1,26 +1,55 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Design tokens.
+ *
+ * Every colour here was sampled from the Figma export (1.1 Cover Page.png)
+ * rather than eyeballed, so they are the design's values and not an
+ * approximation of them. Two are worth knowing about:
+ *
+ * The page is white. The brief called it "warm cream", but the export samples
+ * pure #FFFFFF across every gutter - the cream lives in the section panels and
+ * the cards, which is what gives the page its warmth.
+ *
+ * Nav links are a slate blue, not the near-black used for body copy. It is a
+ * small thing that reads as wrong when you flatten it to one ink colour.
+ */
+@theme {
+  --color-canvas: #ffffff;
+  --color-panel: #f0ebe1;
+  --color-card: #fffbf2;
+  --color-rule: #e4e0d8;
+  --color-field: #f3f3f3;
+
+  --color-ink: #262522;
+  --color-slate: #253d4e;
+  --color-muted: #6f6c66;
+
+  --color-maroon: #812c2c;
+  --color-ember: #dc582a;
+  --color-coral: #ee6352;
+  --color-lime: #9fdc26;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-poppins);
+  --font-body: var(--font-inter);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* No dark mode. The design is a single light treatment and inventing a dark
+ * counterpart would be a different design, not this one rendered at night. */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+/* The carousels move on click, and the transition is the only motion here.
+ * Anyone who has asked not to see motion gets the same content, instantly. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
