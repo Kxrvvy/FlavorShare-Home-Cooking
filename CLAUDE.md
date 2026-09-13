@@ -278,6 +278,36 @@ correct and complete as of the last review.
 "approved server-side technology" (rubric explicitly names PHP as the
 default example).
 
+### Search, filter and sort — two decisions worth knowing
+
+Built in `recipes/filters.py` and wired into `RecipeViewSet`. Both of the
+following look like oversights and are not, so they are recorded here as well
+as in the code.
+
+- **Repeated `tag` and `ingredient` values mean OR, not AND.**
+  `?tag=vegan&tag=gluten-free` returns recipes carrying *either* — it widens
+  the result rather than narrowing it. Different parameters still combine with
+  AND, so `?tag=vegan&cuisine_type=thai` means both. A test asserts that a
+  recipe matching only one of two supplied tags is still returned, which is
+  what will fail if someone later "corrects" this into AND.
+- **Nothing calls `.distinct()`, deliberately.** Filtering across tags or
+  ingredients joins one recipe to several rows and would normally duplicate it.
+  Two things already prevent that: the aggregate annotations in
+  `RecipeViewSet.get_queryset()` put a `GROUP BY` on `Recipe.recipe_id`, and
+  DRF's `SearchFilter` deduplicates its own joins by rewriting the query to
+  `base.filter(Exists(...))`. A `.distinct()` on top would be redundant and
+  would cost a pass over every listing.
+
+  The consequence: **`RecipeFilterSet` is not self-contained.** Applied to a
+  queryset with no aggregate annotation it *does* return duplicate rows —
+  measured, and asserted in `FilterSetInIsolationTests`. Anything that reuses
+  it elsewhere has to annotate or call `.distinct()` itself.
+
+  Related, and the reason the `order_by()` in `get_queryset()` must not be
+  removed: a `GROUP BY` also discards the model's `Meta.ordering` entirely, so
+  that explicit `order_by` is the only thing ordering the recipe list. Dropping
+  it makes pagination silently repeat and skip rows.
+
 ---
 
 ## Project Folder Structure

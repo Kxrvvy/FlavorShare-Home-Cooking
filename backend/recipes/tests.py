@@ -18,21 +18,26 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
-from django.db.models import ProtectedError
+from django.db.models import Count, ProtectedError
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .admin import ImageAdmin, ImageInline
+from .filters import RecipeFilterSet
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 from .serializers import (
     ImageSerializer,
     IngredientSerializer,
     RecipeIngredientSerializer,
+    RecipeListSerializer,
     RecipeWriteSerializer,
     StepSerializer,
 )
+from .views import RecipeViewSet, visible_recipes
+
+RECIPES_URL = '/api/recipes/'
 
 User = get_user_model()
 
@@ -1118,3 +1123,492 @@ class RecipeWriteSerializerTests(RecipeTestCase):
 
         serializer = self._publish(published)
         self.assertTrue(serializer.is_valid(), serializer.errors)
+
+
+class BrowseTestCase(APITestCase):
+    """A small catalogue with known answers, for search, filter and sort.
+
+    Deliberately includes the awkward rows: a recipe carrying two tags that
+    both match one search term, one with no ratings or saves at all, and a
+    draft that must stay out of every public result.
+
+        Tofu curry      Thai/easy      10/20  vegan, gluten-free  tofu, rice
+                                              ratings 5 and 3 -> 4.0, 2 saves
+        Lentil soup     Indian/easy    15/40  vegan               lentils
+                                              rating 4 -> 4.0
+        Rice cake       Filipino/med   30/60  gluten-free         rice
+                                              rating 1 -> 1.0, 1 save
+        Adobo           Filipino/hard  20/90  -                   pork, vinegar
+                                              no ratings, no saves
+        Vegan feast     Fusion/easy    10/10  vegan, vegan-friendly   tofu
+                                              title AND two tags match "vegan"
+        Secret sinigang DRAFT
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        # Imported here rather than at module scope as a reminder of the
+        # direction of dependency: social imports recipes, never the reverse.
+        # A test module may reach across; recipes/filters.py may not.
+        from social.models import Rating, RecipeTag, SavedRecipe, Tag
+
+        cls.author = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.REGISTERED,
+        )
+        cls.fan = User.objects.create_user(
+            username='eater',
+            email='eater@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.REGISTERED,
+        )
+        cls.other_fan = User.objects.create_user(
+            username='second-eater',
+            email='second@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.REGISTERED,
+        )
+        cls.boss = User.objects.create_user(
+            username='moderator',
+            email='mod@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+
+        def make(title, cuisine=None, difficulty=None, prep=None, cook=None,
+                 description=None, tags=(), ingredients=(), views=0,
+                 status_=Recipe.Status.PUBLISHED):
+            recipe = Recipe.objects.create(
+                user=cls.author,
+                title=title,
+                cuisine_type=cuisine,
+                difficulty=difficulty,
+                prep_time=prep,
+                cook_time=cook,
+                description=description,
+                status=status_,
+            )
+            # .update() rather than assignment: view_count is maintained
+            # server-side and this keeps the fixture from looking like a view.
+            Recipe.objects.filter(pk=recipe.pk).update(view_count=views)
+            for name in tags:
+                RecipeTag.objects.create(
+                    recipe=recipe,
+                    tag=Tag.objects.get_or_create(name=name)[0],
+                )
+            for name in ingredients:
+                RecipeIngredient.objects.create(
+                    recipe=recipe,
+                    ingredient=Ingredient.objects.get_or_create(name=name)[0],
+                )
+            recipe.refresh_from_db()
+            return recipe
+
+        cls.curry = make(
+            'Tofu curry', 'Thai', 'easy', 10, 20,
+            description='creamy and quick',
+            tags=('vegan', 'gluten-free'), ingredients=('tofu', 'rice'),
+            views=50,
+        )
+        cls.soup = make(
+            'Lentil soup', 'Indian', 'easy', 15, 40,
+            description='warming', tags=('vegan',),
+            ingredients=('lentils',), views=10,
+        )
+        cls.cake = make(
+            'Rice cake', 'Filipino', 'medium', 30, 60,
+            tags=('gluten-free',), ingredients=('rice',), views=200,
+        )
+        cls.adobo = make(
+            'Adobo', 'Filipino', 'hard', 20, 90,
+            ingredients=('pork', 'vinegar'), views=5,
+        )
+        cls.feast = make(
+            'Vegan feast', 'Fusion', 'easy', 10, 10,
+            description='a vegan spread',
+            tags=('vegan', 'vegan-friendly'), ingredients=('tofu',),
+        )
+        cls.draft = make(
+            'Secret sinigang', 'Filipino', 'easy', 5, 10,
+            tags=('vegan',), ingredients=('tofu',),
+            status_=Recipe.Status.DRAFT,
+        )
+
+        Rating.objects.create(recipe=cls.curry, user=cls.fan, score=5)
+        Rating.objects.create(recipe=cls.curry, user=cls.other_fan, score=3)
+        Rating.objects.create(recipe=cls.soup, user=cls.fan, score=4)
+        Rating.objects.create(recipe=cls.cake, user=cls.fan, score=1)
+        SavedRecipe.objects.create(user=cls.fan, recipe=cls.curry)
+        SavedRecipe.objects.create(user=cls.other_fan, recipe=cls.curry)
+        SavedRecipe.objects.create(user=cls.fan, recipe=cls.cake)
+
+    def browse(self, query='', user=None):
+        """GET the list, returning (titles in order, reported count)."""
+        if user is not None:
+            self.client.force_authenticate(user)
+        response = self.client.get(f'{RECIPES_URL}{query}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        return (
+            [row['title'] for row in response.data['results']],
+            response.data['count'],
+        )
+
+
+class RecipeFilterTests(BrowseTestCase):
+    def test_filter_by_cuisine(self):
+        titles, _ = self.browse('?cuisine_type=Filipino')
+
+        self.assertCountEqual(titles, ['Rice cake', 'Adobo'])
+
+    def test_cuisine_is_case_insensitive(self):
+        """cuisine_type is free text, so the filter normalises rather than
+        relying on the database collation."""
+        titles, _ = self.browse('?cuisine_type=filipino')
+
+        self.assertCountEqual(titles, ['Rice cake', 'Adobo'])
+
+    def test_filter_by_difficulty(self):
+        titles, _ = self.browse('?difficulty=medium')
+
+        self.assertEqual(titles, ['Rice cake'])
+
+    def test_an_unknown_difficulty_is_refused(self):
+        """A ChoiceFilter, so a typo is a 400 naming the valid values rather
+        than an empty page that looks like "no such recipes"."""
+        response = self.client.get(f'{RECIPES_URL}?difficulty=medum')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_filter_by_one_tag(self):
+        titles, _ = self.browse('?tag=vegan')
+
+        self.assertCountEqual(titles, ['Tofu curry', 'Lentil soup', 'Vegan feast'])
+
+    def test_two_tags_mean_either_not_both(self):
+        """OR, deliberately. This is the test that catches someone "fixing"
+        the filter into AND."""
+        titles, _ = self.browse('?tag=vegan&tag=gluten-free')
+
+        self.assertCountEqual(
+            titles,
+            ['Tofu curry', 'Lentil soup', 'Vegan feast', 'Rice cake'],
+        )
+
+    def test_a_recipe_matching_only_one_of_two_tags_is_returned(self):
+        """Rice cake has gluten-free and not vegan; it must still appear."""
+        titles, _ = self.browse('?tag=vegan&tag=gluten-free')
+
+        self.assertIn('Rice cake', titles)
+
+    def test_a_recipe_matching_both_tags_is_returned_once(self):
+        """The join fan-out case. The annotation's GROUP BY is what collapses
+        it - see RecipeViewSet.get_queryset()."""
+        titles, count = self.browse('?tag=vegan&tag=gluten-free')
+
+        self.assertEqual(titles.count('Tofu curry'), 1)
+        self.assertEqual(count, len(titles))
+
+    def test_a_tag_is_matched_regardless_of_case(self):
+        titles, _ = self.browse('?tag=VEGAN')
+
+        self.assertIn('Tofu curry', titles)
+
+    def test_an_unknown_tag_matches_nothing(self):
+        titles, _ = self.browse('?tag=brunchy')
+
+        self.assertEqual(titles, [])
+
+    def test_filter_by_ingredient(self):
+        titles, _ = self.browse('?ingredient=rice')
+
+        self.assertCountEqual(titles, ['Tofu curry', 'Rice cake'])
+
+    def test_two_ingredients_mean_either(self):
+        titles, _ = self.browse('?ingredient=lentils&ingredient=pork')
+
+        self.assertCountEqual(titles, ['Lentil soup', 'Adobo'])
+
+    def test_different_filters_combine_with_and(self):
+        titles, _ = self.browse('?tag=vegan&ingredient=rice')
+
+        self.assertEqual(titles, ['Tofu curry'])
+
+    def test_three_filters_combine(self):
+        titles, _ = self.browse(
+            '?tag=vegan&difficulty=easy&cuisine_type=Thai')
+
+        self.assertEqual(titles, ['Tofu curry'])
+
+    def test_combining_a_tag_and_an_ingredient_returns_one_row(self):
+        """Two joined tables at once - the worst case for duplication."""
+        titles, count = self.browse('?tag=vegan&tag=gluten-free'
+                                    '&ingredient=tofu&ingredient=rice')
+
+        self.assertEqual(titles.count('Tofu curry'), 1)
+        self.assertEqual(count, len(titles))
+
+    def test_filter_by_prep_time_range(self):
+        self.assertCountEqual(
+            self.browse('?prep_time_max=15')[0],
+            ['Tofu curry', 'Lentil soup', 'Vegan feast'],
+        )
+        self.assertCountEqual(
+            self.browse('?prep_time_min=30')[0],
+            ['Rice cake'],
+        )
+
+    def test_filter_by_cook_time_range(self):
+        titles, _ = self.browse('?cook_time_min=40&cook_time_max=60')
+
+        self.assertCountEqual(titles, ['Lentil soup', 'Rice cake'])
+
+    def test_no_filters_returns_everything_visible(self):
+        titles, _ = self.browse()
+
+        self.assertCountEqual(
+            titles,
+            ['Tofu curry', 'Lentil soup', 'Rice cake', 'Adobo', 'Vegan feast'],
+        )
+
+
+class RecipeSearchTests(BrowseTestCase):
+    def test_search_matches_the_title(self):
+        titles, _ = self.browse('?search=adobo')
+
+        self.assertEqual(titles, ['Adobo'])
+
+    def test_search_matches_the_description(self):
+        titles, _ = self.browse('?search=warming')
+
+        self.assertEqual(titles, ['Lentil soup'])
+
+    def test_search_matches_the_cuisine(self):
+        titles, _ = self.browse('?search=thai')
+
+        self.assertEqual(titles, ['Tofu curry'])
+
+    def test_search_finds_a_recipe_by_ingredient_name_alone(self):
+        """"lentils" appears in no title, description or cuisine."""
+        titles, _ = self.browse('?search=lentils')
+
+        self.assertEqual(titles, ['Lentil soup'])
+
+    def test_search_finds_a_recipe_by_tag_name_alone(self):
+        """"gluten" appears in no title, description or cuisine either."""
+        titles, _ = self.browse('?search=gluten')
+
+        self.assertCountEqual(titles, ['Tofu curry', 'Rice cake'])
+
+    def test_a_recipe_matching_through_a_tag_join_appears_once(self):
+        """Search duplication is a separate hazard from filter duplication.
+
+        "Vegan feast" matches on its title, on its description, and on two
+        different tag rows - four join matches for one recipe. DRF's
+        SearchFilter rewrites to base.filter(Exists(...)) to collapse that;
+        this is the test that notices if it stops.
+        """
+        titles, count = self.browse('?search=vegan')
+
+        self.assertEqual(titles.count('Vegan feast'), 1)
+        self.assertEqual(count, len(titles))
+
+    def test_search_and_filter_compose(self):
+        titles, _ = self.browse('?search=vegan&difficulty=easy&cuisine_type=Fusion')
+
+        self.assertEqual(titles, ['Vegan feast'])
+
+
+class RecipeOrderingTests(BrowseTestCase):
+    def test_default_order_is_newest_first(self):
+        titles, _ = self.browse()
+
+        self.assertEqual(titles[0], 'Secret sinigang'
+                         if 'Secret sinigang' in titles else 'Vegan feast')
+
+    def test_order_by_view_count(self):
+        titles, _ = self.browse('?ordering=-view_count')
+
+        self.assertEqual(titles[0], 'Rice cake')
+        self.assertEqual(titles[-1], 'Vegan feast')
+
+    def test_order_by_average_rating(self):
+        response = self.client.get(f'{RECIPES_URL}?ordering=-avg_score')
+        rows = response.data['results']
+
+        self.assertEqual(rows[0]['avg_score'], 4.0)
+        self.assertEqual(rows[2]['title'], 'Rice cake')
+
+    def test_unrated_recipes_sort_last_by_rating(self):
+        """MySQL sorts NULLs last on DESC, which is what "top rated" wants."""
+        titles, _ = self.browse('?ordering=-avg_score')
+
+        self.assertCountEqual(titles[-2:], ['Adobo', 'Vegan feast'])
+
+    def test_order_by_save_count(self):
+        titles, _ = self.browse('?ordering=-save_count')
+
+        self.assertEqual(titles[0], 'Tofu curry')
+        self.assertEqual(titles[1], 'Rice cake')
+
+    def test_ordering_ascending_also_works(self):
+        titles, _ = self.browse('?ordering=view_count')
+
+        self.assertEqual(titles[0], 'Vegan feast')
+        self.assertEqual(titles[-1], 'Rice cake')
+
+    def test_the_annotated_queryset_is_still_ordered(self):
+        """The regression guard.
+
+        A GROUP BY discards the model's Meta.ordering - Django says so in
+        QuerySet.ordered: "A default ordering doesn't affect GROUP BY queries".
+        The annotation in get_queryset() introduces that GROUP BY, so the
+        explicit .order_by() is the only thing ordering the list. Drop it and
+        nothing else in this suite fails; pagination just quietly starts
+        repeating and skipping rows.
+        """
+        view = RecipeViewSet()
+        view.action = 'list'
+        view.request = SimpleNamespace(user=self.author)
+
+        queryset = view.get_queryset()
+        order_by = str(queryset.query).upper().split('ORDER BY')
+
+        self.assertTrue(queryset.ordered)
+        self.assertEqual(len(order_by), 2, 'the queryset has no ORDER BY')
+        # A unique tiebreaker, because created_at is not unique.
+        self.assertIn('RECIPE_ID', order_by[1])
+
+    def test_paging_the_list_raises_no_ordering_warning(self):
+        """The same guard from the other end: DRF warns on an unordered page."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            response = self.client.get(RECIPES_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class BrowseVisibilityTests(BrowseTestCase):
+    """Search and filter narrow what visible_recipes() allows; never widen it."""
+
+    def test_a_guest_filtering_by_tag_does_not_see_drafts(self):
+        titles, _ = self.browse('?tag=vegan')
+
+        self.assertNotIn('Secret sinigang', titles)
+
+    def test_a_guest_cannot_search_out_a_draft(self):
+        titles, _ = self.browse('?search=sinigang')
+
+        self.assertEqual(titles, [])
+
+    def test_an_author_finds_their_own_draft(self):
+        titles, _ = self.browse('?tag=vegan', user=self.author)
+
+        self.assertIn('Secret sinigang', titles)
+
+    def test_an_admin_finds_anybody_s_draft(self):
+        titles, _ = self.browse('?search=sinigang', user=self.boss)
+
+        self.assertEqual(titles, ['Secret sinigang'])
+
+    def test_another_user_cannot_find_someone_elses_draft(self):
+        titles, _ = self.browse('?search=sinigang', user=self.fan)
+
+        self.assertEqual(titles, [])
+
+
+class FilterSetInIsolationTests(BrowseTestCase):
+    """What RecipeFilterSet does *without* the viewset's annotation.
+
+    Documented behaviour rather than desired, and locked in here so the warning
+    in recipes/filters.py cannot quietly become untrue. Anything that reuses
+    this FilterSet has to annotate or call .distinct() itself.
+    """
+
+    def test_without_an_annotation_multi_value_filters_duplicate(self):
+        bare = visible_recipes(self.author)
+
+        filtered = RecipeFilterSet(
+            data={'tag': ['vegan', 'gluten-free']},
+            queryset=bare,
+        ).qs
+
+        self.assertEqual([r.title for r in filtered].count('Tofu curry'), 2)
+
+    def test_with_an_annotation_they_do_not(self):
+        annotated = visible_recipes(self.author).annotate(
+            save_count=Count('saved_by', distinct=True),
+        )
+
+        filtered = RecipeFilterSet(
+            data={'tag': ['vegan', 'gluten-free']},
+            queryset=annotated,
+        ).qs
+
+        self.assertEqual([r.title for r in filtered].count('Tofu curry'), 1)
+
+
+class AnnotatedFieldTests(BrowseTestCase):
+    """avg_score and save_count are annotations, exposed through the serializer."""
+
+    def test_the_values_reach_the_payload(self):
+        response = self.client.get(f'{RECIPES_URL}{self.curry.pk}/')
+
+        self.assertEqual(response.data['avg_score'], 4.0)
+        self.assertEqual(response.data['save_count'], 2)
+
+    def test_an_unrated_recipe_reports_null_and_zero(self):
+        """None for the average, 0 for the count - "nobody rated it" is not a
+        rating, but "nobody saved it" is a real count of zero."""
+        response = self.client.get(f'{RECIPES_URL}{self.adobo.pk}/')
+
+        self.assertIsNone(response.data['avg_score'])
+        self.assertEqual(response.data['save_count'], 0)
+
+    def test_reorder_steps_serialises_them_without_raising(self):
+        """The refresh_from_db() path, end to end.
+
+        reorder_steps() calls recipe.refresh_from_db() and then serialises the
+        result. refresh_from_db() copies only concrete fields, so annotations
+        set on the instance survive it and the real numbers come back - which
+        is worth asserting precisely because an earlier version of the
+        serializer's comment claimed they were lost.
+
+        Either way this must not raise: a declared FloatField would have.
+        """
+        first = Step.objects.create(
+            recipe=self.curry, step_number=1, instruction='Fry the tofu')
+        second = Step.objects.create(
+            recipe=self.curry, step_number=2, instruction='Simmer')
+        self.client.force_authenticate(self.author)
+
+        response = self.client.post(
+            f'{RECIPES_URL}{self.curry.pk}/steps/reorder/',
+            {'step_ids': [second.pk, first.pk]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['avg_score'], 4.0)
+        self.assertEqual(response.data['save_count'], 2)
+        self.assertEqual(
+            [step['instruction'] for step in response.data['steps']],
+            ['Simmer', 'Fry the tofu'],
+        )
+
+    def test_an_instance_that_never_carried_the_annotation_serialises_as_null(self):
+        """Why the serializer uses getattr rather than a declared field.
+
+        A recipe fetched outside the viewset's queryset - here a plain
+        .get() - has no avg_score attribute at all. A declared FloatField
+        raises AttributeError on it; the method field returns None.
+        """
+        plain = Recipe.objects.get(pk=self.curry.pk)
+
+        data = RecipeListSerializer(plain).data
+
+        self.assertIsNone(data['avg_score'])
+        self.assertIsNone(data['save_count'])

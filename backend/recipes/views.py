@@ -18,7 +18,7 @@ import cloudinary.uploader
 from cloudinary.exceptions import Error as CloudinaryError
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Case, F, IntegerField, Max, Q, When
+from django.db.models import Avg, Case, Count, F, IntegerField, Max, Q, When
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -32,6 +32,7 @@ from accounts.permissions import (
     IsRegisteredUserOrReadOnly,
 )
 
+from .filters import RecipeFilterSet
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 from .permissions import IsRecipeOwnerOrReadOnly
 from .serializers import (
@@ -76,6 +77,21 @@ class RecipeViewSet(viewsets.ModelViewSet):
         POST   /<id>/publish/         draft -> published, if it has content
         POST   /<id>/unpublish/       published -> draft
         POST   /<id>/steps/reorder/   renumber steps in one pass
+
+    The list route also searches, filters, sorts and paginates:
+
+        ?search=adobo                      title, description, cuisine,
+                                           ingredient name, tag name
+        ?cuisine_type=filipino
+        ?difficulty=easy
+        ?tag=vegan&tag=gluten-free         either tag
+        ?ingredient=tofu                   either ingredient
+        ?prep_time_max=20&cook_time_min=10
+        ?ordering=-avg_score               or created_at, view_count, save_count
+        ?page=2                            20 per page, from REST_FRAMEWORK
+
+    All of it narrows what visible_recipes() already allowed, and none of it
+    widens that: a draft stays invisible however it is searched for.
     """
 
     # A Recipe carries its author in `user`, which is IsOwnerOrReadOnly's
@@ -86,8 +102,68 @@ class RecipeViewSet(viewsets.ModelViewSet):
         IsOwnerOrReadOnly | IsAdmin,
     ]
 
+    filterset_class = RecipeFilterSet
+
+    # icontains across five fields, two of which cross into social by string
+    # path. Not relevance-ranked - MySQL would need a FULLTEXT index for that,
+    # and the rubric asks for search, not ranking.
+    search_fields = [
+        'title',
+        'description',
+        'cuisine_type',
+        'recipe_ingredients__ingredient__name',
+        'recipe_tags__tag__name',
+    ]
+
+    # avg_score and save_count are annotations rather than columns - see
+    # get_queryset(). OrderingFilter accepts either. `-avg_score` puts unrated
+    # recipes last, which MySQL gives for free by sorting NULLs last.
+    ordering_fields = ['created_at', 'view_count', 'avg_score', 'save_count']
+
     def get_queryset(self):
         recipes = visible_recipes(self.request.user).select_related('user')
+
+        # Annotated for every action, not only list, and that is load-bearing
+        # rather than tidy. These aggregates put a GROUP BY on
+        # Recipe.recipe_id, and that GROUP BY is what collapses the duplicate
+        # rows a multi-value ?tag= or ?ingredient= produces by joining one
+        # recipe to several tag or ingredient rows. Make it conditional and
+        # correctness starts depending on which action ran. recipes/filters.py
+        # documents the same coupling from the other side: the FilterSet alone,
+        # over an unannotated queryset, really does return duplicates.
+        #
+        # distinct=True on the Count is load-bearing too. Without it the same
+        # fan-out multiplies the count, and a recipe with 2 saves, 2 tags and
+        # 2 ingredients reports 8.
+        #
+        # Avg deliberately has no distinct. Uniform fan-out repeats every
+        # rating equally and a mean is unchanged by that, whereas
+        # Avg(distinct=True) would average distinct *scores* and turn 5, 5, 3
+        # into 4.0 instead of 4.33.
+        #
+        # And no .distinct() anywhere, for the same reason: the GROUP BY has
+        # already done it, and DRF's SearchFilter deduplicates its own joins by
+        # rewriting to base.filter(Exists(...)) rather than by DISTINCT. The
+        # absence is a decision, not an oversight.
+        recipes = recipes.annotate(
+            avg_score=Avg('ratings__score'),
+            save_count=Count('saved_by', distinct=True),
+        )
+
+        # This order_by is not decoration and must not be dropped. A GROUP BY
+        # discards the model's Meta.ordering entirely - Django says so in
+        # QuerySet.ordered: "A default ordering doesn't affect GROUP BY
+        # queries" - and the annotation above is what introduces that GROUP BY.
+        # Without this line the list comes back in whatever order MySQL
+        # happens to return, and DRF raises UnorderedObjectListWarning because
+        # paging an unordered queryset can repeat or skip rows. Nothing else
+        # fails visibly, which is why RecipeOrderingTests guards it directly.
+        #
+        # recipe_id is the tiebreaker: created_at is not unique, so two recipes
+        # saved in the same moment could otherwise swap places between page 1
+        # and page 2. OrderingFilter replaces all of this when ?ordering= is
+        # given.
+        recipes = recipes.order_by('-created_at', '-recipe_id')
 
         if self.action == 'list':
             # cover_image reads recipe.images in Python, so without this the

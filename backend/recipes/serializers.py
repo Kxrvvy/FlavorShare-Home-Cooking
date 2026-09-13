@@ -260,6 +260,8 @@ class RecipeListSerializer(serializers.ModelSerializer):
 
     user = RecipeAuthorSerializer(read_only=True)
     cover_image = serializers.SerializerMethodField()
+    avg_score = serializers.SerializerMethodField()
+    save_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Recipe
@@ -276,6 +278,8 @@ class RecipeListSerializer(serializers.ModelSerializer):
             'status',
             'view_count',
             'cover_image',
+            'avg_score',
+            'save_count',
             'created_at',
             'updated_at',
         ]
@@ -293,6 +297,36 @@ class RecipeListSerializer(serializers.ModelSerializer):
             if image.type == Image.Type.FINAL:
                 return image.url
         return None
+
+    def get_avg_score(self, recipe):
+        """The recipe's mean rating, or None if it has none.
+
+        A method field rather than a declared FloatField, and the getattr is
+        the reason. This is an annotation added by
+        RecipeViewSet.get_queryset(), not a column, so an instance that did not
+        come through that queryset does not carry it - a bare
+        Recipe.objects.get(), a freshly constructed Recipe(), a row built in a
+        test or a future management command. A declared field would raise
+        AttributeError on every one of those; this returns None.
+
+        Note what does *not* lose it: refresh_from_db() copies only the model's
+        concrete fields, so annotations set on the instance survive it. An
+        earlier version of this comment claimed otherwise and was wrong -
+        reorder_steps() refreshes and still serialises the real numbers.
+
+        None rather than 0.0 when absent, because "nobody has rated this" and
+        "this instance was not asked" are different claims and only one of them
+        is a rating of zero.
+        """
+        return getattr(recipe, 'avg_score', None)
+
+    def get_save_count(self, recipe):
+        """How many people have this recipe saved. None when unannotated.
+
+        Same reasoning as get_avg_score(), including why it is None and not 0
+        on an instance that never carried the annotation.
+        """
+        return getattr(recipe, 'save_count', None)
 
 
 class RecipeDetailSerializer(RecipeListSerializer):
