@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { AccountMenu } from "@/components/layout/AccountMenu";
+import { CreateRecipeButton } from "@/components/layout/CreateRecipeButton";
 import { MobileMenu, SearchField } from "@/components/layout/MobileMenu";
 import { Logo } from "@/components/ui/Logo";
 
@@ -83,6 +84,8 @@ export function SiteHeader() {
             ))}
           </ul>
         </nav>
+
+        <CreateRecipeButton />
 
         <AccountMenu />
       </div>

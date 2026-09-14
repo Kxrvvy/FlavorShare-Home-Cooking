@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { CreateRecipeButton } from "@/components/layout/CreateRecipeButton";
 import { Logo } from "@/components/ui/Logo";
 import { useSession } from "@/lib/useSession";
 
@@ -93,6 +94,13 @@ export function MobileMenu() {
           className="absolute left-0 right-0 top-full z-40 border-t border-rule bg-canvas px-5 pb-6 pt-5 shadow-lg lg:hidden"
         >
           <SearchField />
+
+          {/* The primary action, so it sits above the nav. Closing the panel on
+            * use matters here and not on desktop: the panel overlays the page it
+            * would otherwise navigate behind. */}
+          <div className="mt-4">
+            <CreateRecipeButton variant="panel" onNavigate={() => setOpen(false)} />
+          </div>
 
           <nav className="mt-5">
             <ul className="flex flex-col">
