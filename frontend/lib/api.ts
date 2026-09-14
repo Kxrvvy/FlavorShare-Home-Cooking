@@ -38,26 +38,20 @@ export type ApiErrors = {
   message: string | null;
 };
 
-export function extractApiErrors(
-  error: unknown,
+/* Shape an already-parsed DRF error body.
+ *
+ * Split out from extractApiErrors so the two HTTP clients in this app can share
+ * one reading of DRF's error shapes. extractApiErrors starts from an axios
+ * error; features/recipes/api.ts uses fetch and has only the parsed body, and
+ * before this it did its own shaping - taking Object.values(body)[0], which for
+ * DRF is an array, failing a typeof check and reporting "Request failed with
+ * status 400" while the server was saying exactly which field was wrong.
+ */
+export function errorsFromBody(
+  data: unknown,
   fallback = "Something went wrong. Please try again.",
 ): ApiErrors {
-  if (!axios.isAxiosError(error)) {
-    return { fields: {}, message: fallback };
-  }
-
-  // No response at all: the request never arrived. Worth saying plainly rather
-  // than blaming whatever the person just typed.
-  if (!error.response) {
-    return {
-      fields: {},
-      message: "Could not reach the server. Is the backend running?",
-    };
-  }
-
-  const data = error.response.data;
-
-  if (typeof data === "string") return { fields: {}, message: data };
+  if (typeof data === "string" && data) return { fields: {}, message: data };
 
   if (data && typeof data === "object") {
     const body = data as Record<string, unknown>;
@@ -77,4 +71,24 @@ export function extractApiErrors(
   }
 
   return { fields: {}, message: fallback };
+}
+
+export function extractApiErrors(
+  error: unknown,
+  fallback = "Something went wrong. Please try again.",
+): ApiErrors {
+  if (!axios.isAxiosError(error)) {
+    return { fields: {}, message: fallback };
+  }
+
+  // No response at all: the request never arrived. Worth saying plainly rather
+  // than blaming whatever the person just typed.
+  if (!error.response) {
+    return {
+      fields: {},
+      message: "Could not reach the server. Is the backend running?",
+    };
+  }
+
+  return errorsFromBody(error.response.data, fallback);
 }

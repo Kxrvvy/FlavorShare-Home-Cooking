@@ -8,6 +8,7 @@ import axios from 'axios';
 
 import { API_BASE_URL } from '@/lib/api';
 import { setSession } from '@/lib/auth';
+import { safeNextPath } from '@/lib/navigation';
 
 interface FormData {
   username: string;
@@ -90,9 +91,19 @@ export default function LoginPage() {
 
       setSession({ access, refresh }, meResponse.data);
 
-      // '/' until there is somewhere better to land. /dashboard does not
-      // exist, so logging in successfully used to end on a 404.
-      router.push('/');
+      /* Back to whatever sent them here - the Create Recipe button arrives as
+       * /login?next=/recipes/create - and '/' when nothing did. /dashboard does
+       * not exist, so logging in successfully used to end on a 404.
+       *
+       * Read here rather than through useSearchParams because nothing on this
+       * page *renders* the value; it is only needed at the moment we navigate.
+       * The hook would additionally force this file behind a <Suspense> boundary
+       * to keep /login prerenderable, which is a lot of restructuring for a
+       * string read once in a click handler. safeNextPath is what makes an
+       * attacker-supplied value safe to follow.
+       */
+      const next = new URLSearchParams(window.location.search).get('next');
+      router.push(safeNextPath(next));
     } catch (error: unknown) {
       // axios.isAxiosError narrows this properly, so the response body can be
       // read without an `any`. A network failure - the backend not running -
