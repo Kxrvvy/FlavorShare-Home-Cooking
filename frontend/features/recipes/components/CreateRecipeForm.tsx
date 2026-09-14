@@ -218,6 +218,13 @@ export default function CreateRecipeForm() {
 
     setStatus("submitting");
     setStatusMessage("");
+
+    /* Held outside the try so the catch can tell whether the recipe row was
+     * created before things went wrong. Everything after createRecipe writes
+     * against that row, so a failure there leaves a real draft behind, and a
+     * message saying nothing was saved would be untrue. */
+    let draftId: number | null = null;
+
     try {
       const token = getAccessToken();
       if (!token) throw new Error("Please sign in before creating a recipe.");
@@ -233,6 +240,7 @@ export default function CreateRecipeForm() {
         },
         token
       );
+      draftId = recipe.recipe_id;
 
       /* One at a time, in order.
        *
@@ -295,6 +303,14 @@ export default function CreateRecipeForm() {
     } catch (error) {
       setStatus("error");
 
+      /* Appended to whatever the failure was. The recipe row survives a failed
+       * submit, so "nothing was saved" would be a lie - what is true is that it
+       * is sitting there as a draft, unpublished, and this form is not the way
+       * back to it. */
+      const draftNote = draftId
+        ? " Your recipe was saved as a draft, so nothing you typed is lost."
+        : "";
+
       if (error instanceof ApiError) {
         /* Put what the server said beside the box it is about. A rejected title
          * belongs on the title input; anything this form has no box for - a
@@ -312,14 +328,16 @@ export default function CreateRecipeForm() {
         const placed = Object.keys(fieldErrors).length > 0;
         if (placed) setErrors((current) => ({ ...current, ...fieldErrors }));
 
-        if (unplaced.length > 0) setStatusMessage(unplaced.join(" "));
+        if (unplaced.length > 0) setStatusMessage(unplaced.join(" ") + draftNote);
         else if (placed) setStatusMessage("Please fix the highlighted fields before continuing.");
-        else setStatusMessage(error.message);
+        else setStatusMessage(error.message + draftNote);
 
         return;
       }
 
-      setStatusMessage(error instanceof Error ? error.message : "Something went wrong.");
+      setStatusMessage(
+        (error instanceof Error ? error.message : "Something went wrong.") + draftNote
+      );
     }
   }
 
@@ -403,8 +421,14 @@ export default function CreateRecipeForm() {
         </div>
       </div>
 
+      {/* min-w-0 on both sections is what stops the page scrolling sideways on a
+        * phone. A grid item defaults to min-width:auto, so its track grows to fit
+        * the widest thing inside rather than to the space available - and these
+        * hold fixed-width controls (the amount and unit boxes, serving size,
+        * cooking time). Measured at 375px: the sections were 424px wide and the
+        * document scrolled 69px past its own viewport. */}
       <div className="mt-10 grid gap-8 md:grid-cols-2">
-        <section>
+        <section className="min-w-0">
           <h2 className="mb-3 text-xl font-semibold">Ingredients</h2>
           <label className="mb-1 flex items-center gap-3 text-sm font-semibold">Serving size<input value={servingSize} onChange={(event) => setServingSize(event.target.value)} inputMode="numeric" placeholder="# of people" className="w-32 rounded-md bg-[#f1e9d8] px-3 py-2 text-sm font-normal outline-none ring-[#3d5a40] focus:ring-2" /></label>
           {errors.servingSize && <p className="mb-2 text-xs text-red-600">{errors.servingSize}</p>}
@@ -466,7 +490,7 @@ export default function CreateRecipeForm() {
           <button type="button" onClick={() => setIngredients((current) => [...current, { id: makeId(), quantity: "", unit: "", name: "" }])} className="mt-3 text-sm font-semibold text-[#c1440e] hover:underline">+ Ingredient</button>
         </section>
 
-        <section>
+        <section className="min-w-0">
           <h2 className="mb-3 text-xl font-semibold">Steps</h2>
           <label className="mb-1 flex items-center gap-3 text-sm font-semibold">Cooking time<input value={cookingTime} onChange={(event) => setCookingTime(event.target.value)} placeholder="1 hr 30 mins" className="w-40 rounded-md bg-[#f1e9d8] px-3 py-2 text-sm font-normal outline-none ring-[#3d5a40] focus:ring-2" /></label>
           {errors.cookingTime && <p className="mb-2 text-xs text-red-600">{errors.cookingTime}</p>}

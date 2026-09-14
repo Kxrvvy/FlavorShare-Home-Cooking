@@ -130,9 +130,13 @@ export function MobileMenu() {
               </Link>
             ) : (
               <div className="min-w-0 text-right">
-                <p className="truncate font-display text-xs font-semibold text-ink">
+                <Link
+                  href="/me/recipes"
+                  onClick={() => setOpen(false)}
+                  className="block truncate font-display text-xs font-semibold text-ink hover:text-maroon"
+                >
                   {user.username}
-                </p>
+                </Link>
                 <button
                   type="button"
                   onClick={handleSignOut}

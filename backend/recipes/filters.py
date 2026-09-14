@@ -122,6 +122,7 @@ class RecipeFilterSet(filters.FilterSet):
         ?tag=vegan&tag=gluten-free          either tag
         ?ingredient=tofu&ingredient=rice    either ingredient
         ?prep_time_max=20&cook_time_max=30
+        ?user=3                            one cook's recipes
 
     Different parameters combine with AND - ?tag=vegan&cuisine_type=thai means
     both - while repeated values of the *same* parameter are OR.
@@ -141,6 +142,13 @@ class RecipeFilterSet(filters.FilterSet):
 
     tag = NameInFilter(field_name='recipe_tags__tag__name')
     ingredient = NameInFilter(field_name='recipe_ingredients__ingredient__name')
+
+    # Whose recipes these are. Combines with visible_recipes() rather than
+    # competing with it: asking for your own id returns your drafts too,
+    # because that queryset already allowed them, while asking for somebody
+    # else's returns only what they have published. One filter therefore serves
+    # both "my recipes" and viewing another cook's public collection.
+    user = filters.NumberFilter(field_name='user__user_id')
 
     prep_time_min = filters.NumberFilter(
         field_name='prep_time',

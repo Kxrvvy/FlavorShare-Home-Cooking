@@ -1612,3 +1612,136 @@ class AnnotatedFieldTests(BrowseTestCase):
 
         self.assertIsNone(data['avg_score'])
         self.assertIsNone(data['save_count'])
+
+
+class ReorderAfterDeletionTests(BrowseTestCase):
+    """Reordering steps whose numbering has a gap in it.
+
+    The gap is not an edge case: deleting a step leaves one on purpose, since
+    nothing renumbers the survivors. So this is the ordinary sequence for
+    anyone editing a recipe - remove a step, then move another - and it raised
+    a 500 until the offset in reorder_steps() stopped being derived from the
+    count of rows.
+    """
+
+    def setUp(self):
+        self.client.force_authenticate(self.author)
+        self.first = Step.objects.create(
+            recipe=self.curry, step_number=1, instruction='Fry the tofu')
+        self.second = Step.objects.create(
+            recipe=self.curry, step_number=2, instruction='Simmer')
+        self.third = Step.objects.create(
+            recipe=self.curry, step_number=3, instruction='Serve')
+
+    def reorder(self, step_ids):
+        return self.client.post(
+            f'{RECIPES_URL}{self.curry.pk}/steps/reorder/',
+            {'step_ids': step_ids},
+            format='json',
+        )
+
+    def test_reordering_after_a_deletion_does_not_collide(self):
+        """The regression. Numbers are {1, 3}; a count-based offset of 2 sent
+        1 -> 3 into the row still holding 3."""
+        self.second.delete()
+
+        response = self.reorder([self.third.pk, self.first.pk])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [step['instruction'] for step in response.data['steps']],
+            ['Serve', 'Fry the tofu'],
+        )
+
+    def test_it_also_closes_the_gap(self):
+        """Reordering renumbers from 1, which is what makes leaving gaps on
+        delete acceptable: they do not accumulate forever."""
+        self.second.delete()
+
+        self.reorder([self.first.pk, self.third.pk])
+
+        self.assertEqual(
+            list(
+                Step.objects.filter(recipe=self.curry)
+                .order_by('step_number')
+                .values_list('step_number', flat=True)
+            ),
+            [1, 2],
+        )
+
+    def test_contiguous_steps_still_reorder(self):
+        """The case that always worked, kept so a fix to the gap cannot quietly
+        break the ordinary path."""
+        response = self.reorder([self.third.pk, self.second.pk, self.first.pk])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [step['instruction'] for step in response.data['steps']],
+            ['Serve', 'Simmer', 'Fry the tofu'],
+        )
+
+    def test_a_single_step_reorders(self):
+        """One step, offset 1: the shifted number must still clear the original."""
+        self.second.delete()
+        self.third.delete()
+
+        response = self.reorder([self.first.pk])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.first.refresh_from_db()
+        self.assertEqual(self.first.step_number, 1)
+
+
+class AuthorFilterTests(BrowseTestCase):
+    """?user=<id> - one cook's recipes.
+
+    Layered on visible_recipes() rather than replacing it, so who may see a
+    draft is still decided in one place. That is what lets the same parameter
+    serve both "my recipes", drafts included, and browsing somebody else's
+    public collection.
+    """
+
+    def test_your_own_id_includes_your_drafts(self):
+        self.client.force_authenticate(self.author)
+
+        response = self.client.get(f'{RECIPES_URL}?user={self.author.pk}')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertIn('Secret sinigang', titles)
+        self.assertIn('Tofu curry', titles)
+
+    def test_somebody_elses_id_hides_their_drafts(self):
+        """The fan has no recipes, so asking for the author's as someone else
+        must return the published ones and nothing more."""
+        self.client.force_authenticate(self.fan)
+
+        response = self.client.get(f'{RECIPES_URL}?user={self.author.pk}')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertNotIn('Secret sinigang', titles)
+        self.assertIn('Tofu curry', titles)
+
+    def test_anonymous_callers_see_only_published(self):
+        response = self.client.get(f'{RECIPES_URL}?user={self.author.pk}')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertNotIn('Secret sinigang', titles)
+
+    def test_an_id_with_no_recipes_returns_nothing(self):
+        self.client.force_authenticate(self.author)
+
+        response = self.client.get(f'{RECIPES_URL}?user={self.fan.pk}')
+
+        self.assertEqual(response.data['results'], [])
+
+    def test_it_combines_with_another_filter(self):
+        """Different parameters are AND, the same as every other pair."""
+        self.client.force_authenticate(self.author)
+
+        response = self.client.get(
+            f'{RECIPES_URL}?user={self.author.pk}&difficulty=easy'
+        )
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertIn('Tofu curry', titles)
+        self.assertNotIn('Adobo', titles)
