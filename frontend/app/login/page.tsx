@@ -6,7 +6,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 
-const API_URL = 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '@/lib/api';
+import { setSession } from '@/lib/auth';
 
 interface FormData {
   username: string;
@@ -74,25 +75,38 @@ export default function LoginPage() {
     setApiError('');
 
     try {
-      const tokenResponse = await axios.post(`${API_URL}/api/token/`, {
+      const tokenResponse = await axios.post(`${API_BASE_URL}/token/`, {
         username: formData.username,
         password: formData.password,
       });
 
       const { access, refresh } = tokenResponse.data;
-      localStorage.setItem('access', access);
-      localStorage.setItem('refresh', refresh);
 
-      const meResponse = await axios.get(`${API_URL}/api/accounts/me/`, {
+      // The profile is fetched before anything is stored, so a failure here
+      // leaves no half-session behind - tokens saved but no user.
+      const meResponse = await axios.get(`${API_BASE_URL}/accounts/me/`, {
         headers: { Authorization: `Bearer ${access}` },
       });
-      localStorage.setItem('user', JSON.stringify(meResponse.data));
 
-      router.push('/dashboard');
-    } catch (error: any) {
-      const message =
-        error.response?.data?.detail ||
-        'Login failed. Please check your username and password.';
+      setSession({ access, refresh }, meResponse.data);
+
+      // '/' until there is somewhere better to land. /dashboard does not
+      // exist, so logging in successfully used to end on a 404.
+      router.push('/');
+    } catch (error: unknown) {
+      // axios.isAxiosError narrows this properly, so the response body can be
+      // read without an `any`. A network failure - the backend not running -
+      // has no response at all, and says so rather than blaming the password.
+      let message = 'Login failed. Please check your username and password.';
+
+      if (axios.isAxiosError(error)) {
+        message =
+          error.response?.data?.detail ??
+          (error.response
+            ? message
+            : 'Could not reach the server. Is the backend running?');
+      }
+
       setApiError(message);
     } finally {
       setLoading(false);
@@ -101,7 +115,7 @@ export default function LoginPage() {
 
   return (
     <div className="h-[100dvh] w-full bg-cover bg-center flex items-center justify-center p-4 sm:p-8 relative overflow-hidden"
-    style={{ backgroundImage: "url('/images/background.png')" }}>
+    style={{ backgroundImage: "url('/images/Background.png')" }}>
 
       <div className="w-full max-w-6xl flex flex-col lg:flex-row gap-8 items-center justify-center h-full">
 

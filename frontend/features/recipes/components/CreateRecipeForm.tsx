@@ -15,6 +15,7 @@ import type {
   StepInput,
   SubmitStatus,
 } from "@/features/recipes/types";
+import { getAccessToken } from "@/lib/auth";
 
 function makeId() {
   return crypto.randomUUID();
@@ -81,7 +82,7 @@ export default function CreateRecipeForm() {
     setStatus("submitting");
     setStatusMessage("");
     try {
-      const token = window.localStorage.getItem("accessToken") ?? "";
+      const token = getAccessToken();
       if (!token) throw new Error("Please sign in before creating a recipe.");
       const recipe = await createRecipe(
         {

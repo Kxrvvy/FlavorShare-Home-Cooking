@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AccountMenu } from "@/components/layout/AccountMenu";
 import { MobileMenu, SearchField } from "@/components/layout/MobileMenu";
 import { Logo } from "@/components/ui/Logo";
 
@@ -13,7 +14,9 @@ import { Logo } from "@/components/ui/Logo";
  * would put a search field and three nav links on a 375px screen that the
  * design deliberately moves into the menu.
  *
- * A Server Component. Only the menu toggle needs to be interactive.
+ * A Server Component. Only the menu toggle and the account control need to be
+ * interactive, and each is its own client component so the rest of the header -
+ * Logo, SearchField, the nav - stays out of the client bundle.
  */
 
 const NAV = [
@@ -81,25 +84,7 @@ export function SiteHeader() {
           </ul>
         </nav>
 
-        {/* Auth is a separate task - this links to the login route so the
-         * control is not a dead element, but nothing here knows who you are. */}
-        <Link
-          href="/login"
-          aria-label="Account"
-          className="hidden h-11 w-11 shrink-0 place-items-center rounded-full border border-rule text-slate transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon lg:grid"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            className="h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-          >
-            <circle cx="12" cy="9" r="3.4" />
-            <path d="M5.5 19.5a6.8 6.8 0 0113 0" strokeLinecap="round" />
-          </svg>
-        </Link>
+        <AccountMenu />
       </div>
     </header>
   );

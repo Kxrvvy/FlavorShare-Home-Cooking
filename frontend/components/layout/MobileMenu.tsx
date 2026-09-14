@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Logo } from "@/components/ui/Logo";
+import { useSession } from "@/lib/useSession";
 
 /* The hamburger and the panel it opens.
  *
@@ -23,6 +25,20 @@ const NAV = [
 
 export function MobileMenu() {
   const [open, setOpen] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+
+  /* The mobile header has no profile control of its own - the design puts
+   * nothing but the logo and this button up there - so the account lives at the
+   * foot of the panel, where "Sign in" already was. */
+  const { user, ready, signOut } = useSession();
+  const router = useRouter();
+
+  async function handleSignOut() {
+    setLeaving(true);
+    await signOut();
+    setOpen(false);
+    router.push("/");
+  }
 
   // A menu that stays open behind you when the page scrolls away is a menu you
   // have to dismiss twice. Escape closes it, as it does for any dialog.
@@ -93,14 +109,32 @@ export function MobileMenu() {
             </ul>
           </nav>
 
-          <div className="mt-5 flex items-center justify-between">
+          <div className="mt-5 flex items-center justify-between gap-3">
             <Logo />
-            <Link
-              href="/login"
-              className="font-display text-xs font-medium uppercase tracking-widest text-maroon"
-            >
-              Sign in
-            </Link>
+
+            {/* Not hydrated yet counts as signed out - see useSession. */}
+            {!ready || !user ? (
+              <Link
+                href="/login"
+                className="font-display text-xs font-medium uppercase tracking-widest text-maroon"
+              >
+                Sign in
+              </Link>
+            ) : (
+              <div className="min-w-0 text-right">
+                <p className="truncate font-display text-xs font-semibold text-ink">
+                  {user.username}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  disabled={leaving}
+                  className="font-display text-xs font-medium uppercase tracking-widest text-maroon disabled:opacity-60"
+                >
+                  {leaving ? "Signing out..." : "Sign out"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
