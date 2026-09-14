@@ -87,6 +87,8 @@ class RecipeViewSet(viewsets.ModelViewSet):
         ?tag=vegan&tag=gluten-free         either tag
         ?ingredient=tofu                   either ingredient
         ?prep_time_max=20&cook_time_min=10
+        ?user=3                            one cook's recipes; your own
+                                           id includes your drafts
         ?ordering=-avg_score               or created_at, view_count, save_count
         ?page=2                            20 per page, from REST_FRAMEWORK
 
@@ -278,7 +280,20 @@ class RecipeViewSet(viewsets.ModelViewSet):
             # the final numbers straight away collides the moment two steps
             # trade places. Offsetting past the current maximum guarantees
             # the second statement lands on free numbers.
-            offset = len(existing)
+            # Offset past the highest number in use, not past the count of
+            # rows. They are the same only while numbering is contiguous, and
+            # it stops being contiguous the moment a step is deleted - nothing
+            # renumbers the rest, by design. With numbers {1, 3} a count-based
+            # offset of 2 sends 1 -> 3, straight into the row still holding 3,
+            # and MySQL raises a duplicate-key error the view reports as a 500.
+            # Max is free of that: every shifted number clears every existing
+            # one.
+            offset = (
+                Step.objects.filter(recipe=recipe).aggregate(
+                    highest=Max('step_number'),
+                )['highest']
+                or 0
+            )
             Step.objects.filter(recipe=recipe).update(
                 step_number=F('step_number') + offset,
             )

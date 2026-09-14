@@ -35,16 +35,33 @@ async function request<T>(
   token: string,
   init: RequestInit = {}
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init.body instanceof FormData
-        ? {}
-        : { "Content-Type": "application/json" }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        ...(init.body instanceof FormData
+          ? {}
+          : { "Content-Type": "application/json" }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init.headers,
+      },
+    });
+  } catch {
+    /* fetch rejects rather than resolving when the request never reaches the
+     * server - backend down, connection dropped, DNS gone - and the TypeError
+     * it throws reads "Failed to fetch", which tells the author nothing. Status
+     * 0 because there is no response to have a status.
+     *
+     * Same wording as lib/api.ts uses for the auth pages, so the app gives one
+     * answer to one situation. */
+    throw new ApiError(
+      0,
+      {},
+      "Could not reach the server. Is the backend running?",
+    );
+  }
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => null);
@@ -178,4 +195,146 @@ export async function attachRecipeImage(
 
 export async function publishRecipe(recipeId: number, token: string) {
   return request(`/recipes/${recipeId}/publish/`, token, { method: "POST" });
+}
+
+/* ---------------------------------------------------------------------------
+ * Incremental editing.
+ *
+ * The builder saves each row as it is finished rather than writing everything
+ * at once, so alongside the create helpers above it needs to read a draft back,
+ * change one row, and remove one. Every verb below was proved against the live
+ * API before being written: RecipeChildViewSet is a full ModelViewSet with
+ * ownership enforced on create and on update, and ?recipe=<id> scopes both
+ * child lists.
+ * ------------------------------------------------------------------------- */
+
+export interface RecipeRow {
+  recipe_id: number;
+  title: string;
+  description: string | null;
+  servings: number | null;
+  prep_time: number | null;
+  cook_time: number | null;
+  cuisine_type: string | null;
+  difficulty: "easy" | "medium" | "hard" | null;
+  status: "draft" | "published";
+  created_at: string;
+}
+
+export interface StepRow {
+  step_id: number;
+  step_number: number;
+  instruction: string;
+  images: { image_id: number; url: string; type: string }[];
+}
+
+export interface IngredientRow {
+  recipe_ingredient_id: number;
+  ingredient: { ingredient_id: number; name: string };
+  quantity: string | null;
+  unit: string | null;
+}
+
+interface Paginated<T> {
+  results?: T[];
+}
+
+/** DRF paginates the child lists; a recipe's rows always fit one page. */
+function rows<T>(payload: Paginated<T> | T[]): T[] {
+  return Array.isArray(payload) ? payload : payload.results ?? [];
+}
+
+export async function getRecipe(recipeId: number, token: string) {
+  return request<RecipeRow>(`/recipes/${recipeId}/`, token);
+}
+
+/** Only the fields that changed - the whole point of saving field by field. */
+export async function updateRecipe(
+  recipeId: number,
+  patch: Partial<Omit<RecipeRow, "recipe_id" | "status" | "created_at">>,
+  token: string
+) {
+  return request<RecipeRow>(`/recipes/${recipeId}/`, token, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteRecipe(recipeId: number, token: string) {
+  return request<void>(`/recipes/${recipeId}/`, token, { method: "DELETE" });
+}
+
+/** A cook's recipes. Your own id includes your drafts, because visible_recipes()
+ * already allowed them; anyone else's returns only what they published. */
+export async function listMyRecipes(userId: number, token: string) {
+  const payload = await request<Paginated<RecipeRow>>(
+    `/recipes/?user=${userId}&ordering=-created_at`,
+    token
+  );
+  return rows(payload);
+}
+
+export async function listSteps(recipeId: number, token: string) {
+  return rows(await request<Paginated<StepRow>>(`/recipes/steps/?recipe=${recipeId}`, token));
+}
+
+export async function updateStep(
+  stepId: number,
+  patch: { instruction?: string; step_number?: number },
+  token: string
+) {
+  return request<StepRow>(`/recipes/steps/${stepId}/`, token, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteStep(stepId: number, token: string) {
+  return request<void>(`/recipes/steps/${stepId}/`, token, { method: "DELETE" });
+}
+
+/* Every step in the recipe, exactly once, in its new order. Partial lists are
+ * refused - there is no right answer for where the omitted ones land. This also
+ * closes any gap left by a deletion, which is why deleting does not renumber. */
+export async function reorderSteps(
+  recipeId: number,
+  stepIds: number[],
+  token: string
+) {
+  return request(`/recipes/${recipeId}/steps/reorder/`, token, {
+    method: "POST",
+    body: JSON.stringify({ step_ids: stepIds }),
+  });
+}
+
+export async function listIngredients(recipeId: number, token: string) {
+  return rows(
+    await request<Paginated<IngredientRow>>(
+      `/recipes/recipe-ingredients/?recipe=${recipeId}`,
+      token
+    )
+  );
+}
+
+/** `ingredient_name` re-points the row at another Ingredient, creating it if
+ * nothing by that name exists - the same write path as adding one. */
+export async function updateIngredient(
+  rowId: number,
+  patch: { ingredient_name?: string; quantity?: string | null; unit?: string | null },
+  token: string
+) {
+  return request<IngredientRow>(`/recipes/recipe-ingredients/${rowId}/`, token, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteIngredient(rowId: number, token: string) {
+  return request<void>(`/recipes/recipe-ingredients/${rowId}/`, token, {
+    method: "DELETE",
+  });
+}
+
+export async function unpublishRecipe(recipeId: number, token: string) {
+  return request(`/recipes/${recipeId}/unpublish/`, token, { method: "POST" });
 }

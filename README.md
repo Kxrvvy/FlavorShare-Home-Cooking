@@ -160,6 +160,30 @@ BREVO_FROM_EMAIL=FlavorShare <you@gmail.com>
 The three optional keys have working defaults in `settings.py`; set them only
 when you need to override one.
 
+#### The frontend needs one variable of its own
+
+Create `frontend/.env.local` the same way — by hand, and it is gitignored too.
+
+| Variable | Required | Example | What it does |
+|---|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | no locally, **yes when deployed** | `http://127.0.0.1:8000/api` | Where the browser sends every API call: login, signup, and everything under recipes. Note the value **includes `/api`** — callers pass `/token/` and `/recipes/`, not `/api/token/`. |
+
+Locally you can skip it: `lib/api.ts` falls back to
+`http://127.0.0.1:8000/api`, which is where `manage.py runserver` listens.
+
+**Deploying is where this bites.** Next inlines every `NEXT_PUBLIC_*` variable
+into the JavaScript bundle at **build** time, not at runtime. So on Vercel it
+has to be set in the project's environment variables *before* the build runs —
+add it and redeploy, rather than adding it to a build that already finished.
+Miss this and the deployed site asks `127.0.0.1:8000` for its data, which is the
+visitor's own machine: every request fails, with nothing in the UI pointing at
+the cause. It is also the reason the value cannot be changed without rebuilding.
+
+The `NEXT_PUBLIC_` prefix is required — Next only exposes variables carrying it
+to browser code. Never put a secret behind that prefix; anything with it is
+readable by anyone who opens the page. The Cloudinary and Brevo keys above stay
+server-side for exactly that reason.
+
 ### 6. Create the tables
 
 ```bash

@@ -113,6 +113,14 @@ export function AccountMenu() {
           </p>
           <p className="truncate text-xs text-muted">{user.email}</p>
 
+          <Link
+            href="/me/recipes"
+            onClick={() => setOpen(false)}
+            className="mt-4 block rounded-full border border-rule py-2 text-center font-display text-xs font-medium uppercase tracking-widest text-ink transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
+          >
+            My recipes
+          </Link>
+
           {/* Admins reach moderation and reporting through Django admin for now;
             * saying so beats a link to a route that does not exist yet. */}
           {user.role === "admin" && (
@@ -125,7 +133,7 @@ export function AccountMenu() {
             type="button"
             onClick={handleSignOut}
             disabled={leaving}
-            className="mt-4 w-full rounded-full border border-rule py-2 font-display text-xs font-medium uppercase tracking-widest text-maroon transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon disabled:opacity-60"
+            className="mt-2 w-full rounded-full border border-rule py-2 font-display text-xs font-medium uppercase tracking-widest text-maroon transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon disabled:opacity-60"
           >
             {leaving ? "Signing out..." : "Sign out"}
           </button>
