@@ -4,28 +4,37 @@
 import { useState, ChangeEvent, FormEvent } from 'react';
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import axios from 'axios';
+
+import { API_BASE_URL, extractApiErrors } from '@/lib/api';
+import { validateEmail, validatePassword } from '@/lib/validation';
 
 interface FormData {
-  name: string;
+  username: string;
   email: string;
   password: string;
 }
 
 interface FormErrors {
-  name?: string;
+  username?: string;
   email?: string;
   password?: string;
 }
 
 export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false);
+  const router = useRouter();
+
   const [formData, setFormData] = useState<FormData>({
-    name: '',
+    username: '',
     email: '',
     password: '',
   });
 
   const [errors, setErrors] = useState<FormErrors>({});
+  const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState('');
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -37,28 +46,23 @@ export default function SignupPage() {
 
   const validateForm = (): FormErrors => {
     const newErrors: FormErrors = {};
-    const passwordRegex = /^(?=.*[A-Z])(?=.*[!@#$%^&*(),.?":{}|<>]).*$/;
 
-    if (!formData.name.trim()) newErrors.name = 'Name is required';
-
-    if (!formData.email) {
-      newErrors.email = 'Email is required';
-    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
-      newErrors.email = 'Email is invalid';
+    if (!formData.username.trim()) {
+      newErrors.username = 'Username is required';
+    } else if (formData.username.length > 50) {
+      newErrors.username = 'Username must be 50 characters or fewer';
     }
 
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    } else if (formData.password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
-    } else if (!passwordRegex.test(formData.password)) {
-      newErrors.password = 'Must include at least one uppercase letter and one special character';
-    }
+    const emailError = validateEmail(formData.email);
+    if (emailError) newErrors.email = emailError;
+
+    const passwordError = validatePassword(formData.password);
+    if (passwordError) newErrors.password = passwordError;
 
     return newErrors;
   };
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     const newErrors = validateForm();
@@ -68,13 +72,38 @@ export default function SignupPage() {
       return;
     }
 
-    // TODO: wire up to backend once signup flow (register/verify-email) is ready
-    console.log('Form submitted:', formData);
+    setLoading(true);
+    setApiError('');
+
+    try {
+      // Creates no account. /register/ answers 202 and emails a code; the
+      // account only exists once /verify-email/ accepts that code, which is
+      // why this goes to the verify screen rather than signing anyone in.
+      await axios.post(`${API_BASE_URL}/accounts/register/`, {
+        username: formData.username,
+        email: formData.email,
+        password: formData.password,
+      });
+
+      router.push(`/signup/verify?email=${encodeURIComponent(formData.email)}`);
+    } catch (error: unknown) {
+      const { fields, message } = extractApiErrors(
+        error,
+        'Could not create your account. Please try again.',
+      );
+
+      // Field errors go back to the input they belong to - a taken username
+      // should be marked on the username box, not in a banner at the top.
+      setErrors(fields as FormErrors);
+      setApiError(message ?? '');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="h-[100dvh] w-full bg-cover bg-center flex items-center justify-center p-4 sm:p-8 relative overflow-hidden"
-    style={{ backgroundImage: "url('/images/background.png')" }}>
+    style={{ backgroundImage: "url('/images/Background.png')" }}>
       <div className="w-full max-w-6xl flex flex-col lg:flex-row gap-8 items-center justify-center h-full">
 
         {/* Back Button */}
@@ -93,19 +122,25 @@ export default function SignupPage() {
               <p className="text-xs sm:text-sm text-amber-900/70">Please fill in details to create your account</p>
             </header>
 
+            {apiError && (
+              <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm text-center">
+                {apiError}
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
               <div>
-                <label className="block text-xs font-medium text-amber-900 mb-1">Name</label>
+                <label className="block text-xs font-medium text-amber-900 mb-1">Username</label>
                 <input
                   type="text"
-                  name="name"
-                  value={formData.name}
+                  name="username"
+                  value={formData.username}
                   onChange={handleChange}
-                  className={`w-full px-4 py-3 bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-600 ${errors.name ? 'ring-2 ring-red-500' : ''}`}
-                  placeholder="Enter your full name"
+                  className={`w-full px-4 py-3 bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-600 ${errors.username ? 'ring-2 ring-red-500' : ''}`}
+                  placeholder="Choose a username"
                 />
-                {errors.name && (
-                  <p className="mt-1 text-sm text-red-600">{errors.name}</p>
+                {errors.username && (
+                  <p className="mt-1 text-sm text-red-600">{errors.username}</p>
                 )}
               </div>
 
@@ -151,9 +186,10 @@ export default function SignupPage() {
               <div className="relative pt-4">
                 <button
                   type="submit"
-                  className="w-full py-4 bg-green-700 text-white rounded-full font-bold hover:bg-green-800 transition-colors"
+                  disabled={loading}
+                  className="w-full py-4 bg-green-700 text-white rounded-full font-bold hover:bg-green-800 transition-colors disabled:opacity-60"
                 >
-                  Create Account
+                  {loading ? 'Sending code...' : 'Create Account'}
                 </button>
               </div>
 
