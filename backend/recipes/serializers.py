@@ -260,6 +260,7 @@ class RecipeListSerializer(serializers.ModelSerializer):
 
     user = RecipeAuthorSerializer(read_only=True)
     cover_image = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
     avg_score = serializers.SerializerMethodField()
     save_count = serializers.SerializerMethodField()
 
@@ -278,6 +279,7 @@ class RecipeListSerializer(serializers.ModelSerializer):
             'status',
             'view_count',
             'cover_image',
+            'tags',
             'avg_score',
             'save_count',
             'created_at',
@@ -297,6 +299,26 @@ class RecipeListSerializer(serializers.ModelSerializer):
             if image.type == Image.Type.FINAL:
                 return image.url
         return None
+
+    def get_tags(self, recipe):
+        """The recipe's tag names, for the badges and the category chips.
+
+        Names rather than ids or objects: the client filters with ?tag=vegan,
+        which is a name, so handing back anything else would make every caller
+        translate. Sorted, so two recipes with the same tags render them in the
+        same order rather than in insertion order.
+
+        Scans already-loaded rows in Python, the same as get_cover_image and
+        for the same reason - a .filter() here would ignore
+        prefetch_related('recipe_tags__tag') and cost one query per recipe.
+        An instance that never came through that queryset simply pays for the
+        query it did not prefetch; it does not break.
+
+        Crossing into social by attribute name rather than by import, which is
+        the direction this project allows: social imports recipes, never the
+        reverse.
+        """
+        return sorted(link.tag.name for link in recipe.recipe_tags.all())
 
     def get_avg_score(self, recipe):
         """The recipe's mean rating, or None if it has none.
@@ -374,6 +396,7 @@ class RecipeWriteSerializer(serializers.ModelSerializer):
             'servings',
             'difficulty',
             'status',
+            'featured',
             'view_count',
             'created_at',
             'updated_at',
@@ -392,11 +415,50 @@ class RecipeWriteSerializer(serializers.ModelSerializer):
         The rule itself is Recipe.publication_error(), so RecipeAdminForm
         enforces the same one. What stays here is the transition: whether
         this request is actually a move into `published`.
+
+        The featured rule is Recipe.clean(), called below so the API refuses
+        what the admin form refuses.
         """
         status = attrs.get(
             'status',
             getattr(self.instance, 'status', Recipe.Status.DRAFT),
         )
+
+        featured = attrs.get(
+            'featured',
+            getattr(self.instance, 'featured', False),
+        )
+
+        # Two different requests reach this line, and only one of them should
+        # be quietly adjusted.
+        #
+        # Unpublishing takes the feature with it: refusing the unpublish would
+        # be the wrong failure, since an admin taking something out of public
+        # view needs that to work.
+        #
+        # Asking to feature something that is not published is a mistake, not a
+        # transition, and falls through to clean() to be refused - clearing it
+        # here would answer 200 to a request that did the opposite of what it
+        # asked.
+        leaving_published = (
+            'status' in attrs and attrs['status'] != Recipe.Status.PUBLISHED
+        )
+        asking_to_feature = attrs.get('featured') is True
+
+        if leaving_published and featured and not asking_to_feature:
+            attrs['featured'] = featured = False
+
+        # Checked on a throwaway instance so a create - which has no self
+        # .instance - is covered by the same rule as an update.
+        probe = self.instance or Recipe()
+        probe_status, probe_featured = probe.status, probe.featured
+        probe.status, probe.featured = status, featured
+        try:
+            probe.clean()
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(as_serializer_error(error))
+        finally:
+            probe.status, probe.featured = probe_status, probe_featured
 
         if status != Recipe.Status.PUBLISHED:
             return attrs

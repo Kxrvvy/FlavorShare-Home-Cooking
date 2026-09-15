@@ -123,6 +123,7 @@ class RecipeFilterSet(filters.FilterSet):
         ?ingredient=tofu&ingredient=rice    either ingredient
         ?prep_time_max=20&cook_time_max=30
         ?user=3                            one cook's recipes
+        ?featured=true                     the curated panel
 
     Different parameters combine with AND - ?tag=vegan&cuisine_type=thai means
     both - while repeated values of the *same* parameter are OR.
@@ -149,6 +150,10 @@ class RecipeFilterSet(filters.FilterSet):
     # else's returns only what they have published. One filter therefore serves
     # both "my recipes" and viewing another cook's public collection.
     user = filters.NumberFilter(field_name='user__user_id')
+
+    # Curated, not measured - see Recipe.featured. A BooleanFilter rather than
+    # an exact match so ?featured=true reads the way a URL is written.
+    featured = filters.BooleanFilter()
 
     prep_time_min = filters.NumberFilter(
         field_name='prep_time',

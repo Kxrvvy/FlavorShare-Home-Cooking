@@ -123,6 +123,14 @@ class Recipe(models.Model):
     view_count = models.PositiveIntegerField(default=0)
 
     # created_at / updated_at TIMESTAMP
+    # featured BOOL DEFAULT FALSE  [not in flavorshare.sql]
+    #
+    # Curation, not a measurement: an admin ticks the recipes worth showing in
+    # the homepage panel. Deliberately not derived from ratings or saves -
+    # "featured" and "trending" would then be two names for popular, and the
+    # Admin power CLAUDE.md promises is the ability to choose.
+    featured = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -136,6 +144,32 @@ class Recipe(models.Model):
 
     def __str__(self):
         return self.title
+
+    def clean(self):
+        """The rule the database cannot express, in one place.
+
+        A draft may not be featured. The panel it feeds is public, and
+        visible_recipes() would hide the recipe from everyone anyway - so
+        featuring a draft is not a smaller mistake than it looks, it is a tick
+        that silently does nothing.
+
+        On the model rather than in the admin action, for the reason
+        Image.clean() gives: there are several ways into this column. The admin
+        change form calls it through full_clean(), RecipeWriteSerializer calls
+        it from validate(), and the bulk actions call it per row. A rule
+        written in only one of those is a rule the others ignore.
+
+        Note this is not called by a plain .save(). Code setting `featured`
+        directly - a fixture, the shell, a data migration - bypasses it, the
+        same as any other Django model validation.
+        """
+        if self.featured and self.status != self.Status.PUBLISHED:
+            raise ValidationError({
+                'featured': (
+                    'Only a published recipe can be featured. Publish it '
+                    'first, or leave this unticked.'
+                ),
+            })
 
     def publication_error(self):
         """Why this recipe may not be published yet, or None if it may.

@@ -704,7 +704,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     try {
       await deleteRecipe(draftId);
       if (user) refreshCollectionCounts(user.user_id);
-      window.location.href = "/me/recipes";
+      router.push("/me/recipes");
     } catch (error) {
       setNotice(error instanceof ApiError ? error.message : "Could not delete this recipe.");
     }

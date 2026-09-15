@@ -317,7 +317,7 @@ export function AppShell({ children, action, variant = "app" }: ShellProps) {
           * way out, not somewhere you navigate to, so it takes the smallest
           * row and the least padding of anything here. */}
         <div className={`border-t border-rule ${collapsed ? "p-1" : "p-1.5"}`}>
-          <AccountMenu variant="sidebar" compact={collapsed} />
+          <AccountMenu compact={collapsed} />
         </div>
       </aside>
 
@@ -381,7 +381,7 @@ export function AppShell({ children, action, variant = "app" }: ShellProps) {
             </div>
 
             <div className="mt-4 border-t border-rule pt-2">
-              <AccountMenu variant="sidebar" onNavigate={() => setOpen(false)} />
+              <AccountMenu onNavigate={() => setOpen(false)} />
             </div>
           </div>
         )}

@@ -203,11 +203,17 @@ class SavedRecipeViewSet(viewsets.ModelViewSet):
                 recipe__in=visible_recipes(self.request.user),
             )
             .select_related('user', 'recipe', 'recipe__user')
-            # The images prefetch is what keeps recipe_detail affordable:
-            # RecipeListSerializer.get_cover_image scans recipe.images in
-            # Python precisely so a prefetch makes it free, and without one a
-            # collection of twenty recipes costs twenty extra queries.
-            .prefetch_related('recipe__images')
+            # These prefetches are what keep recipe_detail affordable:
+            # RecipeListSerializer's get_cover_image and get_tags both scan
+            # already-loaded rows in Python precisely so a prefetch makes them
+            # free, and without them a collection of twenty recipes costs forty
+            # extra queries.
+            #
+            # Note what this means: a field added to RecipeListSerializer lands
+            # here too, because this nests it. The tags field arrived that way
+            # and its N+1 surfaced in this app's query test, not the one that
+            # added it.
+            .prefetch_related('recipe__images', 'recipe__recipe_tags__tag')
         )
 
     def perform_create(self, serializer):

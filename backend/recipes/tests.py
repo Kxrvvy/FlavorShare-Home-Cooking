@@ -19,7 +19,9 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.models import Count, ProtectedError
+from django.db import connection
 from django.test import RequestFactory, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -1745,3 +1747,216 @@ class AuthorFilterTests(BrowseTestCase):
         titles = [r['title'] for r in response.data['results']]
         self.assertIn('Tofu curry', titles)
         self.assertNotIn('Adobo', titles)
+
+
+class FeaturedRuleTests(RecipeTestCase):
+    """A draft may not be featured, wherever the tick comes from."""
+
+    def test_a_published_recipe_can_be_featured(self):
+        self.recipe.status = Recipe.Status.PUBLISHED
+        self.recipe.featured = True
+
+        self.recipe.full_clean()  # must not raise
+
+    def test_a_draft_cannot_be_featured(self):
+        self.recipe.status = Recipe.Status.DRAFT
+        self.recipe.featured = True
+
+        with self.assertRaises(DjangoValidationError) as caught:
+            self.recipe.full_clean()
+
+        self.assertIn('featured', caught.exception.error_dict)
+
+    def test_an_unfeatured_draft_is_fine(self):
+        self.recipe.status = Recipe.Status.DRAFT
+        self.recipe.featured = False
+
+        self.recipe.full_clean()
+
+    def test_save_does_not_enforce_it(self):
+        """Documented, not desired: clean() is not called by .save(), so a
+        fixture or a shell session can still write the pair. Worth pinning so
+        nobody assumes the column is self-defending."""
+        self.recipe.status = Recipe.Status.DRAFT
+        self.recipe.featured = True
+        self.recipe.save()
+
+        self.recipe.refresh_from_db()
+        self.assertTrue(self.recipe.featured)
+
+
+class FeaturedApiTests(BrowseTestCase):
+    """?featured=true, and what the API will and will not accept."""
+
+    def setUp(self):
+        self.curry.featured = True
+        self.curry.save(update_fields=['featured'])
+
+    def test_the_filter_narrows_to_featured(self):
+        response = self.client.get(f'{RECIPES_URL}?featured=true')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertEqual(titles, ['Tofu curry'])
+
+    def test_featured_false_excludes_them(self):
+        response = self.client.get(f'{RECIPES_URL}?featured=false')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertNotIn('Tofu curry', titles)
+        self.assertIn('Adobo', titles)
+
+    def test_a_featured_draft_is_still_invisible_to_a_guest(self):
+        """visible_recipes() decides first, so featuring cannot leak a draft
+        even if one somehow carries the flag."""
+        self.draft.featured = True
+        self.draft.save(update_fields=['featured'])
+
+        response = self.client.get(f'{RECIPES_URL}?featured=true')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertNotIn('Secret sinigang', titles)
+
+    def test_the_api_refuses_to_feature_a_draft(self):
+        self.client.force_authenticate(self.author)
+
+        response = self.client.patch(
+            f'{RECIPES_URL}{self.draft.pk}/',
+            {'featured': True},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('featured', response.data)
+
+    def test_unpublishing_clears_the_feature(self):
+        """The alternative - refusing the unpublish - is the wrong failure: an
+        admin taking something out of public view needs that to work."""
+        self.client.force_authenticate(self.author)
+
+        response = self.client.post(f'{RECIPES_URL}{self.curry.pk}/unpublish/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.curry.refresh_from_db()
+        self.assertEqual(self.curry.status, Recipe.Status.DRAFT)
+        self.assertFalse(self.curry.featured)
+
+
+class FeaturedAdminActionTests(TestCase):
+    """The bulk actions, which never reach Recipe.clean() on their own."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.boss = User.objects.create_superuser(
+            username='chief',
+            email='chief@example.com',
+            password='n0t-a-real-password',
+        )
+        cls.live = Recipe.objects.create(
+            user=cls.boss, title='Live one', status=Recipe.Status.PUBLISHED)
+        cls.draft = Recipe.objects.create(
+            user=cls.boss, title='Draft one', status=Recipe.Status.DRAFT)
+
+    def setUp(self):
+        self.client.force_login(self.boss)
+
+    def run_action(self, action, recipes):
+        return self.client.post(
+            reverse('admin:recipes_recipe_changelist'),
+            {
+                'action': action,
+                '_selected_action': [str(r.pk) for r in recipes],
+            },
+            follow=True,
+        )
+
+    def test_featuring_a_published_recipe_works(self):
+        self.run_action('feature_recipes', [self.live])
+
+        self.live.refresh_from_db()
+        self.assertTrue(self.live.featured)
+
+    def test_featuring_a_draft_is_skipped_and_reported(self):
+        response = self.run_action('feature_recipes', [self.draft])
+
+        self.draft.refresh_from_db()
+        self.assertFalse(self.draft.featured)
+        self.assertContains(response, 'only a published recipe can be')
+
+    def test_a_mixed_selection_features_what_it_can(self):
+        """The reason the action loops instead of calling queryset.update():
+        one bad row must not take the good ones with it, or silently pass."""
+        self.run_action('feature_recipes', [self.live, self.draft])
+
+        self.live.refresh_from_db()
+        self.draft.refresh_from_db()
+        self.assertTrue(self.live.featured)
+        self.assertFalse(self.draft.featured)
+
+    def test_unfeaturing(self):
+        self.live.featured = True
+        self.live.save(update_fields=['featured'])
+
+        self.run_action('unfeature_recipes', [self.live])
+
+        self.live.refresh_from_db()
+        self.assertFalse(self.live.featured)
+
+
+class RecipeTagsPayloadTests(BrowseTestCase):
+    """Tag names on the list payload, and what keeps them affordable."""
+
+    def test_tags_come_back_as_names(self):
+        response = self.client.get(f'{RECIPES_URL}{self.curry.pk}/')
+
+        self.assertEqual(response.data['tags'], ['gluten-free', 'vegan'])
+
+    def test_they_are_sorted_not_in_insertion_order(self):
+        """Two recipes carrying the same tags should render them the same way
+        round, whatever order they happened to be applied in."""
+        response = self.client.get(f'{RECIPES_URL}{self.feast.pk}/')
+
+        self.assertEqual(
+            response.data['tags'],
+            sorted(response.data['tags']),
+        )
+
+    def test_an_untagged_recipe_reports_an_empty_list(self):
+        """Empty, not null - "no tags" is a real answer and the client renders
+        a list either way."""
+        response = self.client.get(f'{RECIPES_URL}{self.adobo.pk}/')
+
+        self.assertEqual(response.data['tags'], [])
+
+    def test_the_list_carries_them_too(self):
+        response = self.client.get(RECIPES_URL)
+
+        by_title = {r['title']: r['tags'] for r in response.data['results']}
+        self.assertEqual(by_title['Tofu curry'], ['gluten-free', 'vegan'])
+        self.assertEqual(by_title['Adobo'], [])
+
+    def test_more_recipes_do_not_cost_more_queries(self):
+        """The prefetch is the point. get_tags scans loaded rows in Python
+        precisely so one is enough; without it every recipe on the page costs
+        a query of its own.
+        """
+        from social.models import RecipeTag, Tag
+
+        # Six recipes at this point; eleven after the loop below. Both fit one
+        # page - PAGE_SIZE is 20 and there is no page_size query parameter - so
+        # what changes between the two measurements is only the row count.
+        with CaptureQueriesContext(connection) as small:
+            self.client.get(RECIPES_URL)
+
+        spare = Tag.objects.create(name='weeknight')
+        for index in range(5):
+            extra = Recipe.objects.create(
+                user=self.author,
+                title=f'Filler {index}',
+                status=Recipe.Status.PUBLISHED,
+            )
+            RecipeTag.objects.create(recipe=extra, tag=spare)
+
+        with CaptureQueriesContext(connection) as bigger:
+            self.client.get(RECIPES_URL)
+
+        self.assertEqual(len(bigger), len(small))
