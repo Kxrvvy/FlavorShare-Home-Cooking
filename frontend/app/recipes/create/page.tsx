@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { RequireSignIn } from "@/components/auth/RequireSignIn";
-import CreateRecipeForm from "@/features/recipes/components/CreateRecipeForm";
+import RecipeBuilder from "@/features/recipes/components/RecipeBuilder";
 
 export const metadata: Metadata = {
   title: "Create Recipe | FlavorShare",
@@ -12,7 +12,7 @@ export default function CreateRecipePage() {
   return (
     <main className="min-h-screen bg-white">
       <RequireSignIn next="/recipes/create" action="create a recipe">
-        <CreateRecipeForm />
+        <RecipeBuilder />
       </RequireSignIn>
     </main>
   );

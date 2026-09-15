@@ -49,7 +49,7 @@ function MyRecipesList() {
     if (!user || !token) return;
 
     try {
-      setRecipes(await listMyRecipes(user.user_id, token));
+      setRecipes(await listMyRecipes(user.user_id));
       setError("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load your recipes.");
@@ -78,9 +78,9 @@ function MyRecipesList() {
     setRowError((current) => ({ ...current, [recipe.recipe_id]: "" }));
 
     try {
-      if (action === "publish") await publishRecipe(recipe.recipe_id, token);
-      if (action === "unpublish") await unpublishRecipe(recipe.recipe_id, token);
-      if (action === "delete") await deleteRecipe(recipe.recipe_id, token);
+      if (action === "publish") await publishRecipe(recipe.recipe_id);
+      if (action === "unpublish") await unpublishRecipe(recipe.recipe_id);
+      if (action === "delete") await deleteRecipe(recipe.recipe_id);
       await load();
     } catch (err) {
       setRowError((current) => ({
@@ -154,6 +154,16 @@ function MyRecipesList() {
               </div>
 
               <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {/* Edit is offered for published recipes too - a typo in a
+                  * published recipe is exactly the thing an author wants to
+                  * fix, and the builder patches either status. */}
+                <Link
+                  href={`/recipes/${recipe.recipe_id}/edit`}
+                  className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-ink hover:bg-panel"
+                >
+                  Edit
+                </Link>
+
                 {recipe.status === "published" ? (
                   <>
                     <Link
