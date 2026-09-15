@@ -48,6 +48,8 @@ from rest_framework.serializers import as_serializer_error
 # recipe authors; reused here under a clearer name rather than written twice.
 from recipes.serializers import RecipeAuthorSerializer as PublicUserSerializer
 
+from recipes.serializers import RecipeListSerializer
+
 from .models import Comment, Rating, RecipeTag, SavedRecipe, Tag
 
 
@@ -258,17 +260,22 @@ class RecipeTagSerializer(serializers.ModelSerializer):
 class SavedRecipeSerializer(_OwnedSerializer):
     """One entry in a user's personal recipe collection.
 
-    Carries the recipe by id only. Nesting the recipe here would let the
-    collection page render cards in one request, but it is deferred to the
-    depth pass along with search and sort - it needs a prefetch on the view to
-    avoid a query per row, and the shape of the card is the frontend's
-    decision, which has not been made yet.
+    `recipe` stays the writable id - saving a recipe is a POST of that id and
+    nothing else. `recipe_detail` is the same row read back, so a collection
+    page renders cards in one request instead of a fetch per entry.
+
+    The prefetch that makes it cheap lives on SavedRecipeViewSet; without it
+    cover_image walks recipe.images once per row. avg_score and save_count come
+    back null here, because those are annotations RecipeViewSet adds and this
+    queryset does not - which is exactly what their getattr default is for.
     """
+
+    recipe_detail = RecipeListSerializer(source='recipe', read_only=True)
 
     class Meta:
         model = SavedRecipe
-        fields = ['saved_recipe_id', 'user', 'recipe', 'saved_at']
-        read_only_fields = ['saved_recipe_id', 'user', 'saved_at']
+        fields = ['saved_recipe_id', 'user', 'recipe', 'recipe_detail', 'saved_at']
+        read_only_fields = ['saved_recipe_id', 'user', 'recipe_detail', 'saved_at']
 
         # Same as RatingSerializer: `user` is read-only, so DRF skips the
         # (user, recipe) constraint and validate() below is the only check

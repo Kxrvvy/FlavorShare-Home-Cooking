@@ -197,10 +197,18 @@ class SavedRecipeViewSet(viewsets.ModelViewSet):
     filterset_fields = ['recipe']
 
     def get_queryset(self):
-        return SavedRecipe.objects.filter(
-            user=self.request.user,
-            recipe__in=visible_recipes(self.request.user),
-        ).select_related('recipe')
+        return (
+            SavedRecipe.objects.filter(
+                user=self.request.user,
+                recipe__in=visible_recipes(self.request.user),
+            )
+            .select_related('user', 'recipe', 'recipe__user')
+            # The images prefetch is what keeps recipe_detail affordable:
+            # RecipeListSerializer.get_cover_image scans recipe.images in
+            # Python precisely so a prefetch makes it free, and without one a
+            # collection of twenty recipes costs twenty extra queries.
+            .prefetch_related('recipe__images')
+        )
 
     def perform_create(self, serializer):
         # The same one rule UserContentViewSet uses - scoping the queryset to

@@ -26,8 +26,18 @@ const AVATAR = [
   "focus-visible:outline-maroon",
 ].join(" ");
 
-export function AccountMenu() {
+type Props = {
+  /** "header" is the bordered circle the top bar used; "sidebar" is a full-width
+   * row, which is what a rail and a drawer both want. */
+  variant?: "header" | "sidebar";
+  /** Collapsed sidebar: the avatar alone, no username beside it. */
+  compact?: boolean;
+  onNavigate?: () => void;
+};
+
+export function AccountMenu({ variant = "header", compact = false, onNavigate }: Props) {
   const { user, ready, signOut } = useSession();
+  const sidebar = variant === "sidebar";
   const router = useRouter();
 
   const [open, setOpen] = useState(false);
@@ -69,6 +79,34 @@ export function AccountMenu() {
 
   // Not hydrated yet, or genuinely nobody: the same link either way.
   if (!ready || !user) {
+    if (sidebar) {
+      return (
+        <Link
+          href="/login"
+          onClick={onNavigate}
+          title={compact ? "Sign in" : undefined}
+          className={`flex items-center gap-2.5 rounded-lg py-1.5 font-display text-xs font-medium text-slate transition-colors hover:bg-panel/60 hover:text-ink ${
+            compact ? "justify-center px-0" : "px-2"
+          }`}
+        >
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-rule">
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <circle cx="12" cy="9" r="3.4" />
+              <path d="M5.5 19.5a6.8 6.8 0 0113 0" strokeLinecap="round" />
+            </svg>
+          </span>
+          {compact ? <span className="sr-only">Sign in</span> : "Sign in"}
+        </Link>
+      );
+    }
+
     return (
       <Link
         href="/login"
@@ -91,22 +129,42 @@ export function AccountMenu() {
   }
 
   return (
-    <div ref={wrapper} className="relative hidden shrink-0 lg:block">
+    <div
+      ref={wrapper}
+      className={sidebar ? "relative" : "relative hidden shrink-0 lg:block"}
+    >
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls="account-menu"
         aria-label={`Account: ${user.username}`}
-        className={`${AVATAR} bg-maroon font-display text-sm font-semibold uppercase text-card`}
+        className={
+          sidebar
+            ? `flex w-full items-center gap-2.5 rounded-lg py-1.5 text-left font-display text-xs font-medium text-ink transition-colors hover:bg-panel/60 ${
+                compact ? "justify-center px-0" : "px-2"
+              }`
+            : `${AVATAR} bg-maroon font-display text-sm font-semibold uppercase text-card`
+        }
       >
-        {user.username.slice(0, 1)}
+        {sidebar ? (
+          <>
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-maroon text-[11px] font-semibold uppercase text-card">
+              {user.username.slice(0, 1)}
+            </span>
+            {!compact && <span className="min-w-0 truncate">{user.username}</span>}
+          </>
+        ) : (
+          user.username.slice(0, 1)
+        )}
       </button>
 
       {open && (
         <div
           id="account-menu"
-          className="absolute right-0 top-full z-40 mt-2 w-60 rounded-2xl border border-rule bg-card p-4 shadow-lg"
+          className={`absolute z-40 w-60 rounded-2xl border border-rule bg-card p-4 shadow-lg ${
+            sidebar ? "bottom-full left-0 mb-2" : "right-0 top-full mt-2"
+          }`}
         >
           <p className="truncate font-display text-sm font-semibold text-ink">
             {user.username}
@@ -115,7 +173,10 @@ export function AccountMenu() {
 
           <Link
             href="/me/recipes"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setOpen(false);
+              onNavigate?.();
+            }}
             className="mt-4 block rounded-full border border-rule py-2 text-center font-display text-xs font-medium uppercase tracking-widest text-ink transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
           >
             My recipes

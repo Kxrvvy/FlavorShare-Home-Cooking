@@ -18,6 +18,8 @@ every field-level validation message, and the admin beyond a smoke test.
 from django.contrib.auth import get_user_model
 from django.db.models import ProtectedError
 from django.test import TestCase
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -451,3 +453,69 @@ class DeletionTests(TestCase):
 
         with self.assertRaises(ProtectedError):
             tag.delete()
+
+
+class SavedRecipeDetailTests(SocialTestCase):
+    """The nested recipe on a collection entry.
+
+    Added when the sidebar gained a Saved view: the page needs a title and a
+    cover to draw a card, and fetching each recipe separately would be one
+    request per saved row.
+    """
+
+    def setUp(self):
+        self.client.force_authenticate(self.reader)
+        self.saved = SavedRecipe.objects.create(user=self.reader, recipe=self.recipe)
+
+    def test_the_entry_carries_the_recipe_itself(self):
+        response = self.client.get('/api/social/saved/')
+
+        entry = response.data['results'][0]
+        self.assertEqual(entry['recipe'], self.recipe.pk)
+        self.assertEqual(entry['recipe_detail']['title'], self.recipe.title)
+        self.assertEqual(entry['recipe_detail']['recipe_id'], self.recipe.pk)
+
+    def test_recipe_detail_is_read_only(self):
+        """Saving a recipe is a POST of its id; the nested copy is never input."""
+        SavedRecipe.objects.all().delete()
+
+        response = self.client.post(
+            '/api/social/saved/',
+            {'recipe': self.recipe.pk, 'recipe_detail': {'title': 'Injected'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.recipe.refresh_from_db()
+        self.assertNotEqual(self.recipe.title, 'Injected')
+
+    def test_a_bigger_collection_does_not_cost_more_queries(self):
+        """The prefetch and the select_related are the point.
+
+        Asserting the shape rather than a number: what matters is that adding
+        rows does not add queries. cover_image walks recipe.images in Python so
+        a prefetch makes it free, and both the saver and the recipe's author are
+        joined rather than fetched per row.
+        """
+        with CaptureQueriesContext(connection) as one_row:
+            self.client.get('/api/social/saved/')
+
+        for index in range(4):
+            extra = Recipe.objects.create(
+                user=self.author,
+                title=f'Extra {index}',
+                status=Recipe.Status.PUBLISHED,
+            )
+            SavedRecipe.objects.create(user=self.reader, recipe=extra)
+
+        with CaptureQueriesContext(connection) as five_rows:
+            self.client.get('/api/social/saved/')
+
+        self.assertEqual(len(five_rows), len(one_row))
+
+    def test_another_users_collection_is_not_listed(self):
+        self.client.force_authenticate(self.author)
+
+        response = self.client.get('/api/social/saved/')
+
+        self.assertEqual(response.data['results'], [])

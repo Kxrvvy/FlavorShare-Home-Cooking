@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 
+import { AppShell } from "@/components/layout/AppShell";
 import { ComingSoon } from "@/components/ui/ComingSoon";
-import { SiteFooter } from "@/components/layout/SiteFooter";
-import { SiteHeader } from "@/components/layout/SiteHeader";
 
 export const metadata: Metadata = {
   title: "Recipe | FlavorShare",
@@ -15,17 +14,11 @@ export const metadata: Metadata = {
  */
 export default function RecipeDetailPage() {
   return (
-    <>
-      <SiteHeader />
-
-      <main className="flex-1">
-        <ComingSoon
-          title="Recipe pages are on the way"
-          blurb="The full recipe - ingredients, steps, photos and nutrition - will open here. Until then the homepage shows what has been published."
-        />
-      </main>
-
-      <SiteFooter />
-    </>
+    <AppShell>
+      <ComingSoon
+        title="Recipe pages are on the way"
+        blurb="The full recipe - ingredients, steps, photos and nutrition - will open here. Until then the homepage shows what has been published."
+      />
+    </AppShell>
   );
 }

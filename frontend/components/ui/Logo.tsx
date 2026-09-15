@@ -1,15 +1,16 @@
-/* The brand mark: a concentric swirl in a circle, with the name stacked beside
- * it. Drawn as SVG rather than shipped as an image so it stays crisp and can
+/* The brand mark: a concentric swirl in a circle, with the name beside it. Drawn as SVG rather than shipped as an image so it stays crisp and can
  * take its colour from wherever it sits - dark ink in the mobile header, cream
  * in the footer. */
 
 type LogoProps = {
   /** Footer sits on near-black, so the mark and name invert there. */
   tone?: "ink" | "cream";
+  /** Just the swirl, for the collapsed sidebar where there is no room to read. */
+  mark?: boolean;
   className?: string;
 };
 
-export function Logo({ tone = "ink", className = "" }: LogoProps) {
+export function Logo({ tone = "ink", mark = false, className = "" }: LogoProps) {
   const text = tone === "cream" ? "text-card" : "text-ink";
 
   return (
@@ -28,11 +29,13 @@ export function Logo({ tone = "ink", className = "" }: LogoProps) {
           strokeLinecap="round"
         />
       </svg>
-      <span className="font-display text-sm font-semibold leading-[1.05]">
-        Flavor
-        <br />
-        Share
-      </span>
+      {mark ? (
+        <span className="sr-only">FlavorShare</span>
+      ) : (
+        <span className="font-display text-sm font-semibold whitespace-nowrap">
+          FlavorShare
+        </span>
+      )}
     </span>
   );
 }

@@ -37,6 +37,13 @@ const VARIANT = {
   header: `hidden shrink-0 whitespace-nowrap px-5 py-2.5 lg:inline-flex ${BASE}`,
   /* Mobile: full width at the top of the open menu, as its primary action. */
   panel: `flex w-full px-5 py-3 ${BASE}`,
+  /* Collapsed sidebar: the plus alone, in a square. */
+  icon: `flex h-11 w-11 ${BASE}`,
+  /* A page's own top-right action: the sidebar's padding and weight, but sized
+   * to its label rather than to a 224px rail it no longer sits in. Unlike
+   * "header" it shows at every width, because the desktop header it belonged
+   * to is gone. */
+  action: `inline-flex shrink-0 whitespace-nowrap px-5 py-3 ${BASE}`,
 };
 
 type Props = {
@@ -47,13 +54,20 @@ type Props = {
 
 export function CreateRecipeButton({ variant = "header", onNavigate }: Props) {
   const { user, ready } = useSession();
+  const iconOnly = variant === "icon";
 
   // Not hydrated yet counts as signed out, the same as everywhere else.
   const href =
     ready && user ? TARGET : `/login?next=${encodeURIComponent(TARGET)}`;
 
   return (
-    <Link href={href} onClick={onNavigate} className={VARIANT[variant]}>
+    <Link
+      href={href}
+      onClick={onNavigate}
+      title={iconOnly ? "Create Recipe" : undefined}
+      aria-label={iconOnly ? "Create Recipe" : undefined}
+      className={VARIANT[variant]}
+    >
       <svg
         viewBox="0 0 24 24"
         aria-hidden="true"
@@ -66,7 +80,7 @@ export function CreateRecipeButton({ variant = "header", onNavigate }: Props) {
         <path d="M12 5v14" />
         <path d="M5 12h14" />
       </svg>
-      Create Recipe
+      {iconOnly ? null : "Create Recipe"}
     </Link>
   );
 }
