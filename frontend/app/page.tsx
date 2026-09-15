@@ -1,8 +1,8 @@
 import { ExploreRecipes } from "@/components/home/ExploreRecipes";
 import { FeaturedRecipes } from "@/components/home/FeaturedRecipes";
 import { Hero } from "@/components/home/Hero";
-import { SiteFooter } from "@/components/layout/SiteFooter";
-import { SiteHeader } from "@/components/layout/SiteHeader";
+import { AppShell } from "@/components/layout/AppShell";
+import { CreateRecipeButton } from "@/components/layout/CreateRecipeButton";
 import { getExplore, getFeatured, getTrending } from "@/lib/dummy-recipes";
 
 /* The homepage.
@@ -20,16 +20,10 @@ export default function HomePage() {
   const explore = getExplore();
 
   return (
-    <>
-      <SiteHeader />
-
-      <main className="flex-1">
-        <Hero recipes={trending.results} />
-        <FeaturedRecipes recipes={featured.results} />
-        <ExploreRecipes recipes={explore.results} />
-      </main>
-
-      <SiteFooter />
-    </>
+    <AppShell action={<CreateRecipeButton variant="action" />}>
+      <Hero recipes={trending.results} />
+      <FeaturedRecipes recipes={featured.results} />
+      <ExploreRecipes recipes={explore.results} />
+    </AppShell>
   );
 }

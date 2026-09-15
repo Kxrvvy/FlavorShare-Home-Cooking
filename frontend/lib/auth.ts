@@ -23,6 +23,7 @@
 import axios from "axios";
 
 import { API_BASE_URL } from "@/lib/api";
+import { clearCollectionCounts } from "@/lib/collectionCounts";
 
 /** Mirrors accounts.serializers.UserSerializer - what /accounts/me/ returns. */
 export type SessionUser = {
@@ -142,6 +143,9 @@ export function clearSession(): void {
   store.removeItem(ACCESS_KEY);
   store.removeItem(REFRESH_KEY);
   store.removeItem(USER_KEY);
+
+  // Counts belong to whoever was signed in; the next account must not see them.
+  clearCollectionCounts();
   notify();
 }
 

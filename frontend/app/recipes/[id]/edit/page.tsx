@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { AppShell } from "@/components/layout/AppShell";
 import { RequireSignIn } from "@/components/auth/RequireSignIn";
 import RecipeBuilder from "@/features/recipes/components/RecipeBuilder";
 
@@ -31,10 +32,10 @@ export default async function EditRecipePage({
   if (!Number.isInteger(recipeId) || recipeId <= 0) notFound();
 
   return (
-    <main className="min-h-screen bg-white">
+    <AppShell variant="editor">
       <RequireSignIn next={`/recipes/${recipeId}/edit`} action="edit a recipe">
         <RecipeBuilder recipeId={recipeId} />
       </RequireSignIn>
-    </main>
+    </AppShell>
   );
 }

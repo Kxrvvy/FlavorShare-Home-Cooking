@@ -238,6 +238,8 @@ export interface ImageRow {
 
 export interface RecipeRow {
   recipe_id: number;
+  /** Nested by both recipe serializers; who wrote it. */
+  user?: { user_id: number; username: string };
   title: string;
   description: string | null;
   servings: number | null;
@@ -303,8 +305,18 @@ export async function listMyRecipes(userId: number) {
   return rows(payload);
 }
 
+/* Sorted here, because the endpoint does not.
+ *
+ * RecipeChildViewSet.get_queryset() ends in .order_by('pk'), which overrides
+ * Step.Meta.ordering, so this list comes back in creation order. Until a recipe
+ * is reordered the two agree and the difference is invisible; afterwards the
+ * builder would reopen showing the order the steps were written in rather than
+ * the order they were arranged into. The recipe detail endpoint nests its steps
+ * through the related manager and is ordered correctly.
+ */
 export async function listSteps(recipeId: number) {
-  return rows(await request<Paginated<StepRow>>(`/recipes/steps/?recipe=${recipeId}`));
+  const steps = rows(await request<Paginated<StepRow>>(`/recipes/steps/?recipe=${recipeId}`));
+  return [...steps].sort((a, b) => a.step_number - b.step_number);
 }
 
 export async function updateStep(
@@ -365,6 +377,20 @@ export async function deleteIngredient(rowId: number) {
  * when a photo is replaced, so a recipe does not end up with two covers. */
 export async function deleteImage(imageId: number) {
   return request<void>(`/recipes/images/${imageId}/`, { method: "DELETE" });
+}
+
+/** One entry in your collection, with the recipe itself attached. */
+export interface SavedRow {
+  saved_recipe_id: number;
+  recipe: number;
+  recipe_detail: RecipeRow;
+  saved_at: string;
+}
+
+/* Recipes you saved from other cooks. The nested recipe_detail is what lets
+ * this render cards without a request per row - see SavedRecipeSerializer. */
+export async function listSavedRecipes() {
+  return rows(await request<Paginated<SavedRow>>("/social/saved/?ordering=-saved_at"));
 }
 
 export async function unpublishRecipe(recipeId: number) {

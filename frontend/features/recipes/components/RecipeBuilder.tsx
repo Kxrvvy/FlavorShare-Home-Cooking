@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import {
@@ -16,11 +18,14 @@ import {
   listIngredients,
   listSteps,
   publishRecipe,
+  reorderSteps,
   updateIngredient,
   updateRecipe,
   updateStep,
   uploadRecipeImage,
 } from "@/features/recipes/api";
+import { RecipePreview } from "@/features/recipes/components/RecipePreview";
+import { refreshCollectionCounts } from "@/lib/collectionCounts";
 import { useSession } from "@/lib/useSession";
 
 /* The recipe builder: every row saves itself.
@@ -119,18 +124,23 @@ function emptyStep(): StepDraft {
   };
 }
 
-const FIELD = "rounded-md bg-[#f1e9d8] px-3 py-2 text-sm outline-none ring-[#3d5a40] focus:ring-2";
+/* One input treatment, from the tokens in app/globals.css. The builder used to
+ * be painted in #f1e9d8 and #c1440e - the only screen in the app with its own
+ * palette, which is what made it read as a different product. */
+const FIELD =
+  "rounded-xl border border-rule bg-field px-3 py-2.5 text-sm text-ink outline-none placeholder:text-muted/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon";
 
 /** A row's own save indicator. Nothing is shown until a row has done something,
  * so an untouched form is not covered in spinners. */
 function RowState({ status }: { status: RowStatus }) {
-  if (status.state === "saving") return <span className="text-xs text-[#6b5f4f]">Saving...</span>;
-  if (status.state === "saved") return <span className="text-xs text-[#3d5a40]">Saved</span>;
+  if (status.state === "saving") return <span className="text-xs text-muted">Saving...</span>;
+  if (status.state === "saved") return <span className="text-xs text-maroon">Saved</span>;
   return null;
 }
 
 export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const { user } = useSession();
+  const router = useRouter();
 
   const [draftId, setDraftId] = useState<number | null>(recipeId ?? null);
   const [loading, setLoading] = useState(Boolean(recipeId));
@@ -160,6 +170,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
   const [inFlight, setInFlight] = useState(0);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [mode, setMode] = useState<"edit" | "preview">("edit");
   const coverInput = useRef<HTMLInputElement>(null);
 
   /* What was last written to the server, so a blur that changed nothing does
@@ -330,6 +342,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           const created = await createRecipe({ title: value });
           ids.current.recipe = created.recipe_id;
           setDraftId(created.recipe_id);
+          // The sidebar totals just changed.
+          if (user) refreshCollectionCounts(user.user_id);
         } else {
           await updateRecipe(existing, { title: value });
         }
@@ -514,7 +528,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     []
   );
 
-  const saveStep = (row: StepDraft, index: number) =>
+  const saveStep = (row: StepDraft) =>
     busy(() =>
       runExclusive(row.key, async () => {
       const recipe = ids.current.recipe;
@@ -578,7 +592,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
   /* A step photo needs its step to exist first - the image row names it - so an
    * unsaved step is saved on the way through. */
-  const chooseStepImage = (row: StepDraft, index: number, file: File | null) =>
+  const chooseStepImage = (row: StepDraft, file: File | null) =>
     busy(() =>
       runExclusive(row.key, async () => {
       if (!file || !ids.current.recipe) return;
@@ -677,6 +691,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     try {
       await publishRecipe(draftId);
       setPublished(true);
+      if (user) refreshCollectionCounts(user.user_id);
       setNotice("Published. Anyone can find this recipe now.");
     } catch (error) {
       setNotice(error instanceof ApiError ? error.message : "Could not publish this recipe.");
@@ -688,11 +703,84 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     if (!window.confirm("Delete this recipe? This cannot be undone.")) return;
     try {
       await deleteRecipe(draftId);
+      if (user) refreshCollectionCounts(user.user_id);
       window.location.href = "/me/recipes";
     } catch (error) {
       setNotice(error instanceof ApiError ? error.message : "Could not delete this recipe.");
     }
   });
+
+  /* ------------------------------------------------------------- reordering */
+
+  /** Send the new order, then renumber locally to match. */
+  const persistOrder = (next: StepDraft[], previous: StepDraft[]) =>
+    busy(() =>
+      runExclusive("steps", async () => {
+        /* Wait for any row still being created. steps/reorder/ refuses a
+         * partial list - "List every step in this recipe exactly once" - so a
+         * step that finishes saving after the list is built would be missing
+         * from it and the whole reorder would fail. */
+        await Promise.allSettled(
+          next.map((row) => queue.current.get(row.key)).filter(Boolean) as Promise<void>[]
+        );
+
+        const recipe = ids.current.recipe;
+        const ordered = next
+          .map((row) => ids.current[row.key])
+          .filter((id): id is number => typeof id === "number");
+
+        // Nothing saved yet, or only one row: no order to record.
+        if (!recipe || ordered.length < 2) return;
+
+        try {
+          await reorderSteps(recipe, ordered);
+
+          /* Reordering renumbers from 1, so this also closes any gap a deletion
+           * left behind - the numbers stop drifting. */
+          let position = 0;
+          setSteps((rows) =>
+            rows.map((row) =>
+              ids.current[row.key] ? { ...row, number: ++position } : row
+            )
+          );
+          nextNumber.current = ordered.length + 1;
+        } catch (error) {
+          // Put the rows back, so what is on screen is what is stored.
+          setSteps(previous);
+          setNotice(
+            error instanceof ApiError ? error.message : "Could not reorder the steps."
+          );
+        }
+      })
+    )();
+
+  /** Move a step to a new position. Used by both the drag handle and the
+   * up/down buttons - HTML5 drag cannot be reached from a keyboard, so a
+   * drag-only control would make step order mouse-only. */
+  function moveStep(from: number, to: number) {
+    if (from === to || to < 0 || to >= steps.length) return;
+
+    const previous = steps;
+    const next = [...steps];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+
+    setSteps(next);
+    persistOrder(next, previous);
+  }
+
+  /* Leaving is just navigation - everything is already written. The one thing
+   * worth stopping for is a row that failed, because its content exists only in
+   * this browser and closing the page abandons it. */
+  function leave() {
+    if (rowsInTrouble > 0) {
+      const ok = window.confirm(
+        `${rowsInTrouble} ${rowsInTrouble === 1 ? "row has" : "rows have"} not been saved. Leave anyway?`
+      );
+      if (!ok) return;
+    }
+    router.push("/me/recipes");
+  }
 
   // ------------------------------------------------------------- the summary
   const rowsInTrouble =
@@ -710,38 +798,90 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const locked = draftId === null;
 
   if (loading) {
-    return <p className="mx-auto max-w-5xl px-5 py-10 text-sm text-[#6b5f4f]">Opening your recipe...</p>;
+    return <p className="mx-auto max-w-[860px] px-5 py-10 text-sm text-muted">Opening your recipe...</p>;
   }
 
   if (loadError) {
     return (
-      <div className="mx-auto max-w-5xl px-5 py-16 text-center">
-        <p role="alert" className="text-base font-semibold text-[#2b2119]">
+      <div className="mx-auto max-w-[860px] px-5 py-16 text-center">
+        <p role="alert" className="font-display text-base font-semibold text-ink">
           {loadError}
         </p>
-        <a
+        <Link
           href="/me/recipes"
-          className="mt-6 inline-block rounded-md bg-[#c1440e] px-5 py-2 text-sm font-semibold text-white hover:bg-[#9e3609]"
+          className="mt-6 inline-block rounded-full bg-maroon px-5 py-2.5 font-display text-sm font-semibold text-card transition-opacity hover:opacity-90"
         >
           Back to my recipes
-        </a>
+        </Link>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-5 py-10 text-[#2b2119]">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-3 border-b border-[#e6dbc6] pb-5">
-        <div aria-live="polite" className="text-sm text-[#6b5f4f]">
-          {summary}
-          {published && <span className="ml-2 font-semibold text-[#3d5a40]">Published</span>}
+    <div className="mx-auto w-full max-w-[860px] px-5 py-8 lg:px-6">
+      {/* Exit on the left, state in the middle, actions on the right.
+        *
+        * No "Save and Close": nothing is waiting to be saved, and a button
+        * saying otherwise would imply that leaving without it loses work - the
+        * exact worry this editor removes. The status line is the reassurance,
+        * and it is honest because it reflects what has actually been written. */}
+      {/* auto/1fr/auto, not 1fr/auto/1fr: equal side tracks centre the middle
+        * on the page, and the two sides are not the same width - the back link
+        * is far narrower than Delete and Publish, so the gap between them was
+        * lopsided. Sizing the sides to their content makes the middle track
+        * exactly the space between them, and centring inside it centres
+        * between the buttons. */}
+      <div className="mb-8 grid gap-4 border-b border-rule pb-5 sm:grid-cols-[auto_1fr_auto] sm:items-end">
+        <button
+          type="button"
+          onClick={leave}
+          className="flex items-center gap-2 pb-1.5 font-display text-xs font-medium text-slate transition-colors hover:text-ink sm:justify-self-start"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            className="h-3.5 w-3.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 5l-7 7 7 7" />
+          </svg>
+          My recipes
+        </button>
+
+        <div className="flex flex-col items-center gap-1.5 justify-self-center">
+          <p aria-live="polite" className="text-center text-[10px] text-muted">
+            {summary}
+            {published && <span className="ml-1.5 font-semibold text-maroon">Published</span>}
+          </p>
+
+          <div className="flex rounded-full border border-rule p-0.5">
+            {(["edit", "preview"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setMode(option)}
+                aria-pressed={mode === option}
+                disabled={option === "preview" && locked}
+                className={`rounded-full px-3.5 py-1 font-display text-[11px] font-semibold capitalize transition-colors disabled:opacity-40 ${
+                  mode === option ? "bg-maroon text-card" : "text-slate hover:text-ink"
+                }`}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-2">
+
+        <div className="flex items-end justify-center gap-4 sm:justify-self-end">
           <button
             type="button"
             onClick={discard}
             disabled={locked}
-            className="rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-40"
+            className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-maroon transition-colors hover:bg-panel disabled:opacity-40"
           >
             Delete
           </button>
@@ -749,7 +889,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
             type="button"
             onClick={publish}
             disabled={locked || published}
-            className="rounded-md bg-[#c1440e] px-5 py-2 text-sm font-semibold text-white hover:bg-[#9e3609] disabled:opacity-50"
+            className="rounded-full bg-maroon px-5 py-2.5 font-display text-sm font-semibold text-card transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {published ? "Published" : "Publish"}
           </button>
@@ -757,330 +897,407 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       </div>
 
       {notice && (
-        <p role="alert" className="mb-6 rounded-md bg-[#f1e9d8] px-4 py-3 text-sm">
+        <p role="alert" className="mb-6 rounded-xl bg-panel px-4 py-3 text-sm text-ink">
           {notice}
         </p>
       )}
 
-      <div className="grid gap-8 lg:grid-cols-[16rem_1fr]">
-        <div>
-          <div className="aspect-[3/4] overflow-hidden rounded-lg border border-[#dcd0b8] bg-[#f1e9d8]">
-            {coverPreview ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={coverPreview} alt="Recipe cover" className="h-full w-full object-cover" />
-            ) : (
-              <div className="flex h-full items-center justify-center p-6 text-center text-sm text-[#6b5f4f]">
-                Upload your recipe photo
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => coverInput.current?.click()}
-            disabled={locked}
-            className="mt-3 w-full rounded-md bg-[#e3a008] py-2 text-sm font-semibold hover:brightness-95 disabled:opacity-40"
-          >
-            {coverPreview ? "Change image" : "Upload recipe image"}
-          </button>
-          <input ref={coverInput} type="file" accept="image/*" onChange={chooseCover} className="hidden" />
-          {fieldErrors.image && <p className="mt-1 text-xs text-red-600">{fieldErrors.image}</p>}
-        </div>
+      {mode === "preview" ? (
+        <RecipePreview
+          title={title}
+          description={description}
+          servings={servings}
+          prepTime={prepTime}
+          cookTime={cookTime}
+          cuisine={cuisine}
+          difficulty={difficulty}
+          cover={coverPreview}
+          ingredients={ingredients}
+          steps={steps}
+          author={user?.username}
+        />
+      ) : (
+      <>
+      {/* ------------------------------------------------------------ identity */}
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={saveTitle}
+        placeholder="Name your recipe"
+        maxLength={150}
+        aria-label="Recipe title"
+        aria-invalid={Boolean(fieldErrors.title)}
+        className="w-full bg-transparent font-display text-3xl font-semibold text-ink outline-none placeholder:text-muted/60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-maroon lg:text-4xl"
+      />
+      {fieldErrors.title && <p className="mt-2 text-sm text-red-600">{fieldErrors.title}</p>}
 
-        <div className="space-y-4">
-          <div>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={saveTitle}
-              placeholder="Title"
-              maxLength={150}
-              aria-invalid={Boolean(fieldErrors.title)}
-              className="w-full rounded-md bg-[#f1e9d8] px-4 py-3 text-xl font-semibold outline-none ring-[#3d5a40] focus:ring-2"
-            />
-            {fieldErrors.title && <p className="mt-1 text-xs text-red-600">{fieldErrors.title}</p>}
-          </div>
+      <div className="mt-3 flex items-center gap-2 text-sm text-muted">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-maroon text-xs font-bold uppercase text-card">
+          {user ? user.username.slice(0, 1) : " "}
+        </span>
+        {user ? `@${user.username}` : ""}
+      </div>
 
-          <div className="flex items-center gap-2 text-sm text-[#6b5f4f]">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#3d5a40] text-xs font-bold uppercase text-white">
-              {user ? user.username.slice(0, 1) : " "}
-            </span>
-            {user ? `@${user.username}` : ""}
-          </div>
-
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            onBlur={saveDescription}
-            disabled={locked}
-            placeholder="Share a little more about your dish!"
-            rows={4}
-            className="w-full resize-none rounded-md bg-[#f1e9d8] px-4 py-3 outline-none ring-[#3d5a40] focus:ring-2 disabled:opacity-50"
-          />
-
-          <div className="flex flex-wrap gap-3">
-            <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm font-semibold">
-              Cuisine
-              <input
-                value={cuisine}
-                onChange={(e) => setCuisine(e.target.value)}
-                onBlur={saveCuisine}
-                disabled={locked}
-                maxLength={50}
-                placeholder="e.g. Filipino"
-                className={`w-full font-normal disabled:opacity-50 ${FIELD}`}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm font-semibold">
-              Difficulty
-              <select
-                value={difficulty}
-                onChange={(e) => setDifficulty(e.target.value)}
-                onBlur={saveDifficulty}
-                disabled={locked}
-                className={`w-40 font-normal capitalize disabled:opacity-50 ${FIELD}`}
-              >
-                <option value="">Not stated</option>
-                {DIFFICULTIES.map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+      {/* A wide shallow band rather than a portrait box: on a phone the title
+        * stays above the fold instead of sitting under most of a screen. */}
+      <div className="mt-6 overflow-hidden rounded-2xl border border-rule bg-panel">
+        <div className="relative aspect-[16/7] w-full">
+          {coverPreview ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={coverPreview} alt="Recipe cover" className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
+              <p className="font-display text-sm font-semibold text-ink">Upload your recipe photo</p>
+              <p className="text-xs text-muted">A real photo of the finished dish</p>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="mt-10 grid gap-8 md:grid-cols-2">
-        <section className="min-w-0">
-          <h2 className="mb-3 text-xl font-semibold">Ingredients</h2>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => coverInput.current?.click()}
+          disabled={locked}
+          className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-ink transition-colors hover:bg-panel disabled:opacity-40"
+        >
+          {coverPreview ? "Change photo" : "Add photo"}
+        </button>
+        <input ref={coverInput} type="file" accept="image/*" onChange={chooseCover} className="hidden" />
+        {fieldErrors.image && <p className="text-xs text-red-600">{fieldErrors.image}</p>}
+      </div>
 
-          <label className="mb-1 flex items-center gap-3 text-sm font-semibold">
-            Serving size
-            <input
-              value={servings}
-              onChange={(e) => setServings(e.target.value)}
-              onBlur={saveServings}
-              disabled={locked}
-              inputMode="numeric"
-              placeholder="# of people"
-              className={`w-32 font-normal disabled:opacity-50 ${FIELD}`}
-            />
-          </label>
-          {fieldErrors.servings && <p className="mb-2 text-xs text-red-600">{fieldErrors.servings}</p>}
+      <textarea
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        onBlur={saveDescription}
+        disabled={locked}
+        placeholder="Share a little more about your dish"
+        rows={3}
+        aria-label="Description"
+        className={`mt-6 w-full resize-none ${FIELD} disabled:opacity-50`}
+      />
 
-          <div className="space-y-2">
-            {ingredients.map((row, index) => (
-              <div key={row.key}>
-                {/* Narrow: the amount and unit share the top line with the
-                  * remove button, and the ingredient name takes a full-width
-                  * line of its own beneath. Three fixed-width boxes plus a name
-                  * do not fit a phone - and the name is the part that needs the
-                  * room, since "self-raising flour" is the content and "200 g"
-                  * is only the measure.
-                  *
-                  * Unstacked at lg, not sm: these sections become two columns at
-                  * md, so between md and lg each one is only ~350px wide and a
-                  * single row would leave the name about 115px. Waiting for lg
-                  * means it never unstacks into something cramped.
-                  *
-                  * Grid rather than flex-wrap, so the button can sit on the
-                  * first line while the name - later in the DOM, where tab order
-                  * wants it - is placed on the second. */}
-                <div className="grid grid-cols-[4rem_6rem_1fr] gap-2 lg:grid-cols-[4rem_6rem_1fr_auto]">
-                  <input
-                    value={row.quantity}
-                    onChange={(e) => patchIngredient(row.key, { quantity: e.target.value })}
-                    onBlur={() => saveIngredient(row)}
-                    disabled={locked}
-                    inputMode="decimal"
-                    aria-label={`Amount for ingredient ${index + 1}`}
-                    placeholder="200"
-                    className={`w-full min-w-0 disabled:opacity-50 ${FIELD}`}
-                  />
-                  <input
-                    value={row.unit}
-                    onChange={(e) => patchIngredient(row.key, { unit: e.target.value })}
-                    onBlur={() => saveIngredient(row)}
-                    disabled={locked}
-                    list="ingredient-units"
-                    maxLength={30}
-                    aria-label={`Unit for ingredient ${index + 1}`}
-                    placeholder="g"
-                    className={`w-full min-w-0 disabled:opacity-50 ${FIELD}`}
-                  />
-                  <input
-                    value={row.name}
-                    onChange={(e) => patchIngredient(row.key, { name: e.target.value })}
-                    onBlur={() => saveIngredient(row)}
-                    disabled={locked}
-                    maxLength={100}
-                    aria-label={`Ingredient ${index + 1}`}
-                    placeholder="plain flour"
-                    className={`col-span-3 row-start-2 w-full min-w-0 disabled:opacity-50 lg:col-span-1 lg:col-start-3 lg:row-start-1 ${FIELD}`}
-                  />
+      {/* One row for the facts. They used to be split across the two columns,
+        * with the times filed under Steps and the serving size under
+        * Ingredients, which nothing justified. */}
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Serves
+          <input
+            value={servings}
+            onChange={(e) => setServings(e.target.value)}
+            onBlur={saveServings}
+            disabled={locked}
+            inputMode="numeric"
+            placeholder="4"
+            className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
+          />
+          {fieldErrors.servings && (
+            <span className="font-normal normal-case tracking-normal text-red-600">{fieldErrors.servings}</span>
+          )}
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Prep time
+          <input
+            value={prepTime}
+            onChange={(e) => setPrepTime(e.target.value)}
+            onBlur={savePrepTime}
+            disabled={locked}
+            placeholder="15 mins"
+            className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
+          />
+          {fieldErrors.prep_time && (
+            <span className="font-normal normal-case tracking-normal text-red-600">{fieldErrors.prep_time}</span>
+          )}
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Cook time
+          <input
+            value={cookTime}
+            onChange={(e) => setCookTime(e.target.value)}
+            onBlur={saveCookTime}
+            disabled={locked}
+            placeholder="1 hr 30 mins"
+            className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
+          />
+          {fieldErrors.cook_time && (
+            <span className="font-normal normal-case tracking-normal text-red-600">{fieldErrors.cook_time}</span>
+          )}
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Cuisine
+          <input
+            value={cuisine}
+            onChange={(e) => setCuisine(e.target.value)}
+            onBlur={saveCuisine}
+            disabled={locked}
+            maxLength={50}
+            placeholder="Filipino"
+            className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Difficulty
+          <select
+            value={difficulty}
+            onChange={(e) => setDifficulty(e.target.value)}
+            onBlur={saveDifficulty}
+            disabled={locked}
+            className={`w-full font-normal normal-case capitalize tracking-normal text-ink ${FIELD} disabled:opacity-50`}
+          >
+            <option value="">Not stated</option>
+            {DIFFICULTIES.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {/* --------------------------------------------------------- ingredients */}
+      <section className="mt-12">
+        <h2 className="font-display text-xl font-semibold text-ink">Ingredients</h2>
+
+        <div className="mt-4 space-y-3">
+          {ingredients.map((row, index) => (
+            <div key={row.key}>
+              {/* Full width now, so the three boxes fit one line from about
+                * 600px up; below that the name still takes its own row. */}
+              <div className="grid grid-cols-[5rem_7rem_1fr] gap-2 sm:grid-cols-[5rem_7rem_1fr_auto]">
+                <input
+                  value={row.quantity}
+                  onChange={(e) => patchIngredient(row.key, { quantity: e.target.value })}
+                  onBlur={() => saveIngredient(row)}
+                  disabled={locked}
+                  inputMode="decimal"
+                  aria-label={`Amount for ingredient ${index + 1}`}
+                  placeholder="200"
+                  className={`w-full min-w-0 ${FIELD} disabled:opacity-50`}
+                />
+                <input
+                  value={row.unit}
+                  onChange={(e) => patchIngredient(row.key, { unit: e.target.value })}
+                  onBlur={() => saveIngredient(row)}
+                  disabled={locked}
+                  list="ingredient-units"
+                  maxLength={30}
+                  aria-label={`Unit for ingredient ${index + 1}`}
+                  placeholder="g"
+                  className={`w-full min-w-0 ${FIELD} disabled:opacity-50`}
+                />
+                <input
+                  value={row.name}
+                  onChange={(e) => patchIngredient(row.key, { name: e.target.value })}
+                  onBlur={() => saveIngredient(row)}
+                  disabled={locked}
+                  maxLength={100}
+                  aria-label={`Ingredient ${index + 1}`}
+                  placeholder="plain flour"
+                  className={`col-span-3 row-start-2 w-full min-w-0 sm:col-span-1 sm:col-start-3 sm:row-start-1 ${FIELD} disabled:opacity-50`}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeIngredient(row)}
+                  disabled={locked}
+                  aria-label={`Remove ingredient ${index + 1}`}
+                  className="col-start-3 row-start-1 justify-self-end px-2 text-muted transition-colors hover:text-red-600 disabled:opacity-30 sm:col-start-4 sm:row-start-1"
+                >
+                  &times;
+                </button>
+              </div>
+
+              <div className="mt-1 flex items-center gap-2 pl-1">
+                <RowState status={row.status} />
+                {row.status.state === "error" && (
+                  <>
+                    <span role="alert" className="text-xs text-red-600">
+                      {row.status.message}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => saveIngredient(row)}
+                      className="text-xs font-semibold text-maroon hover:underline"
+                    >
+                      Retry
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+
+          <datalist id="ingredient-units">
+            {UNITS.map((unit) => (
+              <option key={unit} value={unit} />
+            ))}
+          </datalist>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setIngredients((rows) => [...rows, emptyIngredient()])}
+          disabled={locked}
+          className="mt-4 font-display text-sm font-semibold text-maroon hover:underline disabled:opacity-40"
+        >
+          + Ingredient
+        </button>
+      </section>
+
+      {/* --------------------------------------------------------------- steps */}
+      <section className="mt-12">
+        <h2 className="font-display text-xl font-semibold text-ink">Steps</h2>
+
+        <div className="mt-4 space-y-4">
+          {steps.map((row, index) => (
+            <div
+              key={row.key}
+              onDragOver={(e) => {
+                if (dragging !== null) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragging !== null) moveStep(dragging, index);
+                setDragging(null);
+              }}
+              className={`rounded-2xl border bg-card p-4 transition-colors ${
+                dragging === index ? "border-maroon" : "border-rule"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-1 flex shrink-0 flex-col items-center gap-1">
+                  {/* Drag for a mouse, the arrows for everything else. */}
                   <button
                     type="button"
-                    onClick={() => removeIngredient(row)}
+                    draggable={!locked}
+                    onDragStart={() => setDragging(index)}
+                    onDragEnd={() => setDragging(null)}
                     disabled={locked}
-                    aria-label={`Remove ingredient ${index + 1}`}
-                    className="col-start-3 row-start-1 justify-self-end px-2 text-[#6b5f4f] hover:text-red-600 disabled:opacity-30 lg:col-start-4 lg:row-start-1"
+                    aria-label={`Reorder step ${index + 1}`}
+                    className="cursor-grab px-1 text-muted transition-colors hover:text-ink active:cursor-grabbing disabled:opacity-30"
                   >
-                    x
+                    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M5 9h14M5 15h14" />
+                    </svg>
                   </button>
-                </div>
 
-                <div className="mt-1 flex items-center gap-2 pl-1">
-                  <RowState status={row.status} />
-                  {row.status.state === "error" && (
-                    <>
-                      <span role="alert" className="text-xs text-red-600">
-                        {row.status.message}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => saveIngredient(row)}
-                        className="text-xs font-semibold text-[#c1440e] hover:underline"
-                      >
-                        Retry
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-maroon text-xs font-bold text-card">
+                    {index + 1}
+                  </span>
 
-            <datalist id="ingredient-units">
-              {UNITS.map((unit) => (
-                <option key={unit} value={unit} />
-              ))}
-            </datalist>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIngredients((rows) => [...rows, emptyIngredient()])}
-            disabled={locked}
-            className="mt-3 text-sm font-semibold text-[#c1440e] hover:underline disabled:opacity-40"
-          >
-            + Ingredient
-          </button>
-        </section>
-
-        <section className="min-w-0">
-          <h2 className="mb-3 text-xl font-semibold">Steps</h2>
-
-          <label className="mb-1 flex items-center gap-3 text-sm font-semibold">
-            Cooking time
-            <input
-              value={cookTime}
-              onChange={(e) => setCookTime(e.target.value)}
-              onBlur={saveCookTime}
-              disabled={locked}
-              placeholder="1 hr 30 mins"
-              className={`w-40 font-normal disabled:opacity-50 ${FIELD}`}
-            />
-          </label>
-          {fieldErrors.cook_time && <p className="mb-2 text-xs text-red-600">{fieldErrors.cook_time}</p>}
-
-          <label className="mb-1 flex items-center gap-3 text-sm font-semibold">
-            Prep time
-            <input
-              value={prepTime}
-              onChange={(e) => setPrepTime(e.target.value)}
-              onBlur={savePrepTime}
-              disabled={locked}
-              placeholder="15 mins (optional)"
-              className={`w-40 font-normal disabled:opacity-50 ${FIELD}`}
-            />
-          </label>
-          {fieldErrors.prep_time && <p className="mb-2 text-xs text-red-600">{fieldErrors.prep_time}</p>}
-
-          <div className="space-y-3">
-            {steps.map((row, index) => (
-              <div key={row.key} className="flex items-start gap-2">
-                <span className="mt-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#3d5a40] text-xs font-bold text-white">
-                  {index + 1}
-                </span>
-
-                <div className="min-w-0 flex-1 space-y-2">
-                  <textarea
-                    value={row.text}
-                    onChange={(e) => patchStep(row.key, { text: e.target.value })}
-                    onBlur={() => saveStep(row, index)}
-                    disabled={locked}
-                    placeholder={`Describe step ${index + 1}...`}
-                    rows={2}
-                    className="w-full resize-none rounded-md bg-[#f1e9d8] px-3 py-2 text-sm outline-none ring-[#3d5a40] focus:ring-2 disabled:opacity-50"
-                  />
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {row.preview && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={row.preview}
-                        alt={`Step ${index + 1} photo`}
-                        className="h-12 w-12 shrink-0 rounded-md border border-[#dcd0b8] object-cover"
-                      />
-                    )}
-
-                    <label
-                      className={`text-xs font-semibold text-[#c1440e] ${locked ? "opacity-40" : "cursor-pointer hover:underline"}`}
+                  <div className="flex flex-col">
+                    <button
+                      type="button"
+                      onClick={() => moveStep(index, index - 1)}
+                      disabled={locked || index === 0}
+                      aria-label={`Move step ${index + 1} up`}
+                      className="px-1 text-muted transition-colors hover:text-ink disabled:opacity-25"
                     >
-                      {row.imageUrl ? "Change photo" : "+ Photo"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        disabled={locked}
-                        aria-label={`Photo for step ${index + 1}`}
-                        onChange={(e) => chooseStepImage(row, index, e.target.files?.[0] ?? null)}
-                        className="hidden"
-                      />
-                    </label>
-
-                    <RowState status={row.status} />
-
-                    {row.status.state === "error" && (
-                      <>
-                        <span role="alert" className="text-xs text-red-600">
-                          {row.status.message}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => saveStep(row, index)}
-                          className="text-xs font-semibold text-[#c1440e] hover:underline"
-                        >
-                          Retry
-                        </button>
-                      </>
-                    )}
+                      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 15l6-6 6 6" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveStep(index, index + 1)}
+                      disabled={locked || index === steps.length - 1}
+                      aria-label={`Move step ${index + 1} down`}
+                      className="px-1 text-muted transition-colors hover:text-ink disabled:opacity-25"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </button>
                   </div>
                 </div>
+
+                <textarea
+                  value={row.text}
+                  onChange={(e) => patchStep(row.key, { text: e.target.value })}
+                  onBlur={() => saveStep(row)}
+                  disabled={locked}
+                  placeholder={`What happens in step ${index + 1}?`}
+                  rows={2}
+                  aria-label={`Step ${index + 1}`}
+                  className={`min-w-0 flex-1 resize-none ${FIELD} disabled:opacity-50`}
+                />
 
                 <button
                   type="button"
                   onClick={() => removeStep(row)}
                   disabled={locked}
                   aria-label={`Remove step ${index + 1}`}
-                  className="mt-2 px-2 text-[#6b5f4f] hover:text-red-600 disabled:opacity-30"
+                  className="mt-1.5 px-2 text-muted transition-colors hover:text-red-600 disabled:opacity-30"
                 >
-                  x
+                  &times;
                 </button>
               </div>
-            ))}
-          </div>
 
-          <button
-            type="button"
-            onClick={() => setSteps((rows) => [...rows, emptyStep()])}
-            disabled={locked}
-            className="mt-3 text-sm font-semibold text-[#c1440e] hover:underline disabled:opacity-40"
-          >
-            + Step
-          </button>
-        </section>
-      </div>
+              {/* A real preview rather than a 48px thumbnail - there is room for
+                * it now that the editor is one column. */}
+              <div className="mt-3 flex flex-wrap items-center gap-3 pl-11">
+                {row.preview && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={row.preview}
+                    alt={`Step ${index + 1} photo`}
+                    className="h-28 w-40 shrink-0 rounded-xl border border-rule object-cover"
+                  />
+                )}
+
+                <label
+                  className={`rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-ink transition-colors ${
+                    locked ? "opacity-40" : "cursor-pointer hover:bg-panel"
+                  }`}
+                >
+                  {row.imageUrl ? "Change photo" : "Add photo"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={locked}
+                    aria-label={`Photo for step ${index + 1}`}
+                    onChange={(e) => chooseStepImage(row, e.target.files?.[0] ?? null)}
+                    className="hidden"
+                  />
+                </label>
+
+                <RowState status={row.status} />
+
+                {row.status.state === "error" && (
+                  <>
+                    <span role="alert" className="text-xs text-red-600">
+                      {row.status.message}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => saveStep(row)}
+                      className="text-xs font-semibold text-maroon hover:underline"
+                    >
+                      Retry
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setSteps((rows) => [...rows, emptyStep()])}
+          disabled={locked}
+          className="mt-4 font-display text-sm font-semibold text-maroon hover:underline disabled:opacity-40"
+        >
+          + Step
+        </button>
+      </section>
+      </>
+      )}
     </div>
   );
 }
