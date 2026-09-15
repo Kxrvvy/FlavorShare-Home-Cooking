@@ -9,6 +9,7 @@ import {
   attachRecipeImage,
   createRecipe,
   deleteIngredient,
+  deleteImage,
   deleteRecipe,
   deleteStep,
   getRecipe,
@@ -69,6 +70,7 @@ interface StepDraft {
   text: string;
   preview: string | null;
   imageUrl: string | null;
+  imageId: number | null;
   status: RowStatus;
 }
 
@@ -111,7 +113,10 @@ function emptyIngredient(): IngredientDraft {
 }
 
 function emptyStep(): StepDraft {
-  return { key: makeKey(), stepId: null, number: null, text: "", preview: null, imageUrl: null, status: IDLE };
+  return {
+    key: makeKey(), stepId: null, number: null, text: "",
+    preview: null, imageUrl: null, imageId: null, status: IDLE,
+  };
 }
 
 const FIELD = "rounded-md bg-[#f1e9d8] px-3 py-2 text-sm outline-none ring-[#3d5a40] focus:ring-2";
@@ -149,6 +154,9 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const [steps, setSteps] = useState<StepDraft[]>([emptyStep()]);
 
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  /* The Image row behind the cover, so replacing it can remove the old one
+   * rather than leaving a recipe with two covers and no way to say which. */
+  const [coverImageId, setCoverImageId] = useState<number | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
   const [inFlight, setInFlight] = useState(0);
@@ -158,6 +166,36 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
    * not spend a request. Kept in a ref rather than state: reading it must never
    * trigger a render. */
   const saved = useRef<Record<string, string>>({});
+
+  /* ---------------------------------------------------------------------
+   * Three refs that exist because React state is not readable soon enough.
+   *
+   * A blur starts an async save. A second blur can arrive before the first
+   * response lands, and at that moment state still says what it said before -
+   * no id yet, no step number yet. Every decision a save makes about "does
+   * this row exist on the server" therefore reads a ref, never state.
+   * ------------------------------------------------------------------- */
+
+  /** One save at a time per thing. Keyed "recipe" or by a row's key, so
+   * different rows still save at once and only the same one queues. */
+  const queue = useRef<Map<string, Promise<void>>>(new Map());
+
+  /** Server ids, written the instant a response lands. A queued save reads the
+   * id the save before it created, instead of POSTing a second row. */
+  const ids = useRef<Record<string, number>>({});
+
+  /** Reserved synchronously, because two colliding step saves belong to
+   * different rows and queueing per row cannot separate them. */
+  const nextNumber = useRef(1);
+
+  function runExclusive(key: string, fn: () => Promise<void>) {
+    const previous = queue.current.get(key) ?? Promise.resolve();
+    const next = previous.then(fn, fn).finally(() => {
+      if (queue.current.get(key) === next) queue.current.delete(key);
+    });
+    queue.current.set(key, next);
+    return next;
+  }
 
   const busy = (fn: () => Promise<void>) => async () => {
     setInFlight((n) => n + 1);
@@ -202,30 +240,47 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           difficulty: recipe.difficulty ?? "",
         };
 
+        ids.current.recipe = recipeId;
+        /* Past every number the server already holds, so a new step cannot land
+         * on one that survived a deletion. */
+        nextNumber.current =
+          Math.max(0, ...stepRows.map((row) => row.step_number)) + 1;
+        setCoverPreview(recipe.images?.find((i) => i.type === "final")?.url ?? null);
+        setCoverImageId(recipe.images?.find((i) => i.type === "final")?.image_id ?? null);
+
         setIngredients(
           ingredientRows.length
-            ? ingredientRows.map((row) => ({
-                key: makeKey(),
-                rowId: row.recipe_ingredient_id,
-                quantity: row.quantity === null ? "" : String(Number(row.quantity)),
-                unit: row.unit ?? "",
-                name: row.ingredient.name,
-                status: SAVED,
-              }))
+            ? ingredientRows.map((row) => {
+                const key = makeKey();
+                ids.current[key] = row.recipe_ingredient_id;
+                return {
+                  key,
+                  rowId: row.recipe_ingredient_id,
+                  quantity: row.quantity === null ? "" : String(Number(row.quantity)),
+                  unit: row.unit ?? "",
+                  name: row.ingredient.name,
+                  status: SAVED,
+                };
+              })
             : [emptyIngredient()]
         );
 
         setSteps(
           stepRows.length
-            ? stepRows.map((row) => ({
-                key: makeKey(),
+            ? stepRows.map((row) => {
+                const key = makeKey();
+                ids.current[key] = row.step_id;
+                return {
+                key,
                 stepId: row.step_id,
                 number: row.step_number,
                 text: row.instruction,
                 preview: row.images.find((i) => i.type === "step")?.url ?? null,
                 imageUrl: row.images.find((i) => i.type === "step")?.url ?? null,
+                imageId: row.images.find((i) => i.type === "step")?.image_id ?? null,
                 status: SAVED,
-              }))
+              };
+              })
             : [emptyStep()]
         );
       } catch (error) {
@@ -252,32 +307,41 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
   // ------------------------------------------------- the draft itself
   /** Creates the recipe the first time the title is usable; patches it after. */
-  const saveTitle = busy(async () => {
-    const value = title.trim();
+  const saveTitle = busy(() =>
+    runExclusive("recipe", async () => {
+      const value = title.trim();
 
-    if (value.length < 3) {
-      setFieldErrors((e) => ({ ...e, title: "Title should be at least 3 characters." }));
-      return;
-    }
-    setFieldErrors((e) => ({ ...e, title: "" }));
-
-    if (value === saved.current.title) return;
-
-    try {
-      if (draftId === null) {
-        const created = await createRecipe({ title: value });
-        setDraftId(created.recipe_id);
-      } else {
-        await updateRecipe(draftId, { title: value });
+      if (value.length < 3) {
+        setFieldErrors((e) => ({ ...e, title: "Title should be at least 3 characters." }));
+        return;
       }
-      saved.current.title = value;
-    } catch (error) {
-      setFieldErrors((e) => ({
-        ...e,
-        title: error instanceof ApiError ? error.message : "Could not save the title.",
-      }));
-    }
-  });
+      setFieldErrors((e) => ({ ...e, title: "" }));
+
+      if (value === saved.current.title) return;
+
+      try {
+        /* ids.current.recipe, not draftId: a second blur arriving while the
+         * first POST is unanswered would read state that still says null and
+         * create a second recipe - the duplicate-draft failure this builder
+         * exists to prevent. */
+        const existing = ids.current.recipe ?? null;
+
+        if (existing === null) {
+          const created = await createRecipe({ title: value });
+          ids.current.recipe = created.recipe_id;
+          setDraftId(created.recipe_id);
+        } else {
+          await updateRecipe(existing, { title: value });
+        }
+        saved.current.title = value;
+      } catch (error) {
+        setFieldErrors((e) => ({
+          ...e,
+          title: error instanceof ApiError ? error.message : "Could not save the title.",
+        }));
+      }
+    })
+  );
 
   /** Every other recipe field: one PATCH carrying only what changed. */
   function fieldSaver(
@@ -286,24 +350,32 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     build: () => Record<string, unknown> | null,
     errorKey = key
   ) {
-    return busy(async () => {
-      if (draftId === null) return;
-      if (value === (saved.current[key] ?? "")) return;
+    /* Queued behind the title on the same "recipe" key. Without that, typing a
+     * title and tabbing straight into the description PATCHes against a draft
+     * that does not exist yet - draftId is still null, the save returns
+     * silently, and what was typed is quietly lost. Queueing means the id is
+     * there by the time this runs. */
+    return busy(() =>
+      runExclusive("recipe", async () => {
+        const recipe = ids.current.recipe;
+        if (!recipe) return;
+        if (value === (saved.current[key] ?? "")) return;
 
-      const payload = build();
-      if (payload === null) return; // invalid; the message is already set
+        const payload = build();
+        if (payload === null) return; // invalid; the message is already set
 
-      try {
-        await updateRecipe(draftId, payload);
-        saved.current[key] = value;
-        setFieldErrors((e) => ({ ...e, [errorKey]: "" }));
-      } catch (error) {
-        setFieldErrors((e) => ({
-          ...e,
-          [errorKey]: error instanceof ApiError ? error.message : "Could not save that.",
-        }));
-      }
-    });
+        try {
+          await updateRecipe(recipe, payload);
+          saved.current[key] = value;
+          setFieldErrors((e) => ({ ...e, [errorKey]: "" }));
+        } catch (error) {
+          setFieldErrors((e) => ({
+            ...e,
+            [errorKey]: error instanceof ApiError ? error.message : "Could not save that.",
+          }));
+        }
+      })
+    );
   }
 
   const saveDescription = fieldSaver("description", description, () => ({
@@ -360,8 +432,10 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   );
 
   const saveIngredient = (row: IngredientDraft) =>
-    busy(async () => {
-      if (draftId === null) return;
+    busy(() =>
+      runExclusive(row.key, async () => {
+      const recipe = ids.current.recipe;
+      if (!recipe) return;
 
       const name = row.name.trim();
       if (!name) return;
@@ -381,18 +455,24 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       };
 
       try {
-        if (row.rowId === null) {
-          const created = await addIngredient(draftId, {
+        /* The ref, not row.rowId: tabbing through this row's three inputs can
+         * start a second save while the first POST is unanswered, and the
+         * closure would still say "no id yet" and create a duplicate. */
+        const rowId = ids.current[row.key] ?? null;
+
+        if (rowId === null) {
+          const created = await addIngredient(recipe, {
             name,
             quantity: row.quantity.trim() || undefined,
             unit: row.unit.trim() || undefined,
           });
+          ids.current[row.key] = created.recipe_ingredient_id;
           patchIngredient(row.key, {
             rowId: created.recipe_ingredient_id,
             status: SAVED,
           });
         } else {
-          await updateIngredient(row.rowId, { ingredient_name: name, ...payload });
+          await updateIngredient(rowId, { ingredient_name: name, ...payload });
           patchIngredient(row.key, { status: SAVED });
         }
       } catch (error) {
@@ -403,7 +483,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           },
         });
       }
-    })();
+      })
+    )();
 
   const removeIngredient = (row: IngredientDraft) =>
     busy(async () => {
@@ -433,13 +514,11 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     []
   );
 
-  /** One past the highest number the server has for this recipe. */
-  const nextStepNumber = () =>
-    Math.max(0, ...steps.map((s) => s.number ?? 0)) + 1;
-
   const saveStep = (row: StepDraft, index: number) =>
-    busy(async () => {
-      if (draftId === null) return;
+    busy(() =>
+      runExclusive(row.key, async () => {
+      const recipe = ids.current.recipe;
+      if (!recipe) return;
 
       const text = row.text.trim();
       if (!text) return;
@@ -447,19 +526,22 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       patchStep(row.key, { status: { state: "saving" } });
 
       try {
-        if (row.stepId === null) {
-          /* An explicit number, so two steps added quickly cannot both ask the
-           * server to derive the same one - the collision that used to return
-           * 500s - and past the highest in use, so it cannot land on a step
-           * that survived a deletion. */
-          const created = await addStep(draftId, text, nextStepNumber());
+        const stepId = ids.current[row.key] ?? null;
+
+        if (stepId === null) {
+          /* Reserved from the ref before the await, so two steps saved together
+           * take different numbers. Deriving it from state gave both the same
+           * one, because neither had a number until its response landed. */
+          const number = nextNumber.current++;
+          const created = await addStep(recipe, text, number);
+          ids.current[row.key] = created.step_id;
           patchStep(row.key, {
             stepId: created.step_id,
             number: created.step_number,
             status: SAVED,
           });
         } else {
-          await updateStep(row.stepId, { instruction: text });
+          await updateStep(stepId, { instruction: text });
           patchStep(row.key, { status: SAVED });
         }
       } catch (error) {
@@ -470,7 +552,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           },
         });
       }
-    })();
+      })
+    )();
 
   const removeStep = (row: StepDraft) =>
     busy(async () => {
@@ -496,8 +579,9 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   /* A step photo needs its step to exist first - the image row names it - so an
    * unsaved step is saved on the way through. */
   const chooseStepImage = (row: StepDraft, index: number, file: File | null) =>
-    busy(async () => {
-      if (!file || draftId === null) return;
+    busy(() =>
+      runExclusive(row.key, async () => {
+      if (!file || !ids.current.recipe) return;
 
       if (!file.type.startsWith("image/")) {
         patchStep(row.key, { status: { state: "error", message: "Step photos must be image files." } });
@@ -511,16 +595,36 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       patchStep(row.key, { status: { state: "saving" } });
 
       try {
-        let stepId = row.stepId;
+        const recipe = ids.current.recipe as number;
+        let stepId = ids.current[row.key] ?? null;
+
         if (stepId === null) {
-          const created = await addStep(draftId, row.text.trim() || "Step", nextStepNumber());
+          const created = await addStep(recipe, row.text.trim() || "Step", nextNumber.current++);
           stepId = created.step_id;
+          ids.current[row.key] = stepId;
           patchStep(row.key, { stepId, number: created.step_number });
         }
 
         const uploaded = await uploadRecipeImage(file);
-        await attachRecipeImage(draftId, uploaded.url, { type: "step", step: stepId });
-        patchStep(row.key, { preview: uploaded.url, imageUrl: uploaded.url, status: SAVED });
+        const attached = await attachRecipeImage(recipe, uploaded.url, {
+          type: "step",
+          step: stepId,
+        });
+
+        /* Replacing a photo removes the one it replaces. Nothing in the schema
+         * stops several images pointing at one step - CLAUDE.md records that as
+         * a deliberate soft limitation - so without this they accumulate and
+         * the page has no way to say which is current. */
+        if (row.imageId !== null) {
+          await deleteImage(row.imageId).catch(() => {});
+        }
+
+        patchStep(row.key, {
+          preview: uploaded.url,
+          imageUrl: uploaded.url,
+          imageId: attached.image_id,
+          status: SAVED,
+        });
       } catch (error) {
         patchStep(row.key, {
           status: {
@@ -529,7 +633,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           },
         });
       }
-    })();
+      })
+    )();
 
   const chooseCover = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -544,20 +649,25 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       return;
     }
 
-    void busy(async () => {
-      if (draftId === null) return;
+    void busy(() =>
+      runExclusive("cover", async () => {
+      const recipe = ids.current.recipe;
+      if (!recipe) return;
       setFieldErrors((e) => ({ ...e, image: "" }));
       try {
         const uploaded = await uploadRecipeImage(file);
-        await attachRecipeImage(draftId, uploaded.url);
+        const attached = await attachRecipeImage(recipe, uploaded.url);
+        if (coverImageId !== null) await deleteImage(coverImageId).catch(() => {});
         setCoverPreview(uploaded.url);
+        setCoverImageId(attached.image_id);
       } catch (error) {
         setFieldErrors((e) => ({
           ...e,
           image: error instanceof ApiError ? error.message : "Could not upload that image.",
         }));
       }
-    })();
+      })
+    )();
   };
 
   // ------------------------------------------------------------- publishing

@@ -203,7 +203,7 @@ export async function attachRecipeImage(
   options: { type?: "final" | "ingredient" | "step"; step?: number } = {}
 ) {
   const { type = "final", step } = options;
-  return request("/recipes/images/", {
+  return request<ImageRow>("/recipes/images/", {
     method: "POST",
     body: JSON.stringify({
       recipe: recipeId,
@@ -229,6 +229,13 @@ export async function publishRecipe(recipeId: number) {
  * child lists.
  * ------------------------------------------------------------------------- */
 
+export interface ImageRow {
+  image_id: number;
+  url: string;
+  type: "final" | "ingredient" | "step";
+  step: number | null;
+}
+
 export interface RecipeRow {
   recipe_id: number;
   title: string;
@@ -240,6 +247,9 @@ export interface RecipeRow {
   difficulty: "easy" | "medium" | "hard" | null;
   status: "draft" | "published";
   created_at: string;
+  /* RecipeDetailSerializer nests these; the list serializer does not. Present
+   * on getRecipe, which is the only caller that needs them. */
+  images?: ImageRow[];
 }
 
 export interface StepRow {
@@ -348,6 +358,13 @@ export async function deleteIngredient(rowId: number) {
   return request<void>(`/recipes/recipe-ingredients/${rowId}/`, {
     method: "DELETE",
   });
+}
+
+/* Removing the Image row unlinks the photo; the file itself stays on
+ * Cloudinary, which the upload endpoint's own docstring already notes. Used
+ * when a photo is replaced, so a recipe does not end up with two covers. */
+export async function deleteImage(imageId: number) {
+  return request<void>(`/recipes/images/${imageId}/`, { method: "DELETE" });
 }
 
 export async function unpublishRecipe(recipeId: number) {
