@@ -179,3 +179,64 @@ export async function signOut(): Promise<void> {
     clearSession();
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Renewing a session.
+ *
+ * Access tokens last 30 minutes and nothing used to renew them, so a tab left
+ * open came back to failures with no explanation. Two settings shape every line
+ * of this (backend/settings.py):
+ *
+ *     ROTATE_REFRESH_TOKENS   each refresh returns a NEW refresh token
+ *     BLACKLIST_AFTER_ROTATION  and kills the one just used, immediately
+ *
+ * So the new refresh token has to be stored or the next attempt fails forever -
+ * and, less obviously, two refreshes cannot both succeed. The first blacklists
+ * the token; the second sends a dead one and gets 401. A builder saving six
+ * rows at once would fire six refreshes and sign the user out, which is the
+ * failure this exists to prevent. Hence single-flight: concurrent callers wait
+ * on one request rather than starting their own.
+ * ------------------------------------------------------------------------- */
+
+let inFlight: Promise<boolean> | null = null;
+
+/** Renew the session. True if it worked; false means signed out. Never throws. */
+export function refreshSession(): Promise<boolean> {
+  if (inFlight) return inFlight;
+
+  inFlight = (async () => {
+    const refresh = getRefreshToken();
+    const user = getUser();
+
+    // Nothing to refresh with, or no profile to store alongside the new pair.
+    if (!refresh || !user) {
+      clearSession();
+      return false;
+    }
+
+    try {
+      const { data } = await axios.post(`${API_BASE_URL}/token/refresh/`, {
+        refresh,
+      });
+
+      if (!data?.access || !data?.refresh) {
+        clearSession();
+        return false;
+      }
+
+      setSession({ access: data.access, refresh: data.refresh }, user);
+      return true;
+    } catch {
+      /* Expired, blacklisted, or unreachable. Clearing notifies subscribers,
+       * so useSession() updates and RequireSignIn shows its gate with a way
+       * back - the signed-out state reaches the screen instead of every
+       * request failing quietly. */
+      clearSession();
+      return false;
+    } finally {
+      inFlight = null;
+    }
+  })();
+
+  return inFlight;
+}
