@@ -1943,6 +1943,18 @@ class FeaturedApiTests(BrowseTestCase):
         titles = [r['title'] for r in response.data['results']]
         self.assertEqual(titles, ['Tofu curry'])
 
+    def test_the_list_payload_says_which_recipes_are_featured(self):
+        """RecipeListSerializer used to omit `featured` entirely - readable
+        only by PATCHing a recipe and reading its own response back. Nothing
+        that only lists recipes, like the admin dashboard's moderation table,
+        could tell which ones already carried the flag.
+        """
+        response = self.client.get(RECIPES_URL)
+
+        by_title = {r['title']: r['featured'] for r in response.data['results']}
+        self.assertTrue(by_title['Tofu curry'])
+        self.assertFalse(by_title['Adobo'])
+
     def test_featured_false_excludes_them(self):
         response = self.client.get(f'{RECIPES_URL}?featured=false')
 

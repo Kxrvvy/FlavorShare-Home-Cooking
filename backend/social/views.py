@@ -25,6 +25,7 @@ from rest_framework.exceptions import ValidationError
 
 from accounts.permissions import (
     IsAdmin,
+    IsAdminOrReadOnly,
     IsOwnerOrReadOnly,
     IsRegisteredUser,
     IsRegisteredUserOrReadOnly,
@@ -158,24 +159,40 @@ class RecipeTagViewSet(RecipeChildViewSet):
         return super().get_queryset().select_related('tag')
 
 
-class TagViewSet(viewsets.ReadOnlyModelViewSet):
+class TagViewSet(viewsets.ModelViewSet):
     """/api/social/tags/ - the shared tag lookup table.
 
-    Read-only over the API for the same reason IngredientViewSet is: rows are
-    created as a side effect of tagging a recipe, so a separate create route
-    would only produce tags attached to nothing. Renaming a bad tag is an
-    admin job.
+    Reads stay open to guests, since a tag filter on the public recipe list
+    reads this without being signed in. Writes are admin-only - IsAdminOrReadOnly,
+    not IsRegisteredUserOrReadOnly - because a tag is not one person's content
+    the way a rating or comment is: renaming or deleting one reaches every
+    recipe that carries it, so it is a moderation action, not authorship.
 
-    Open to guests, since a tag filter on the public recipe list reads it
-    without being signed in.
+    Tag.recipe_links (RecipeTag.tag) is PROTECT, matching
+    RecipeIngredient.ingredient: deleting "vegan" from the lookup table must
+    not silently untag every recipe that carries it. Left as Django's
+    ProtectedError, DRF turns that into an unhandled 500 - perform_destroy
+    below checks first so a tag still in use is a clean 400 naming how many
+    recipes carry it, and the admin panel can show that before the confirm
+    dialog rather than after a failed delete.
     """
 
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
-    permission_classes = [IsRegisteredUserOrReadOnly]
+    permission_classes = [IsAdminOrReadOnly]
 
     search_fields = ['name']
     ordering_fields = ['name']
+
+    def perform_destroy(self, instance):
+        count = instance.recipe_links.count()
+        if count:
+            raise ValidationError(
+                f'{count} recipe{"s" if count != 1 else ""} still '
+                f'{"carry" if count != 1 else "carries"} this tag. Untag '
+                f'{"them" if count != 1 else "it"} first, then delete the tag.'
+            )
+        instance.delete()
 
 
 class SavedRecipeViewSet(viewsets.ModelViewSet):

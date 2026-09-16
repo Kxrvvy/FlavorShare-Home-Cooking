@@ -329,22 +329,65 @@ class TagApiTests(SocialTestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(RecipeTag.objects.exists())
 
-    def test_the_tag_lookup_table_is_read_only(self):
-        """Rows appear by tagging a recipe; a create route makes orphans."""
+    def test_a_registered_user_may_not_write_the_tag_lookup_table(self):
+        """Writing a tag reaches every recipe that carries it - a moderation
+        action, not authorship, so IsAdminOrReadOnly refuses it rather than
+        the *OrReadOnly classes that let any registered user write."""
         self.client.force_authenticate(self.author)
 
         response = self.client.post(TAGS_URL, {'name': 'vegan'})
 
-        self.assertEqual(
-            response.status_code,
-            status.HTTP_405_METHOD_NOT_ALLOWED,
-        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(Tag.objects.exists())
 
     def test_guests_may_read_the_tag_lookup_table(self):
         self.assertEqual(
             self.client.get(TAGS_URL).status_code,
             status.HTTP_200_OK,
         )
+
+    def test_an_admin_may_create_a_tag(self):
+        self.client.force_authenticate(self.boss)
+
+        response = self.client.post(TAGS_URL, {'name': '  VEGAN '})
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Tag.objects.get().name, 'vegan')
+
+    def test_an_admin_may_rename_a_tag(self):
+        tag = Tag.objects.create(name='vegan')
+        self.client.force_authenticate(self.boss)
+
+        response = self.client.patch(f'{TAGS_URL}{tag.pk}/', {'name': 'vegetarian'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        tag.refresh_from_db()
+        self.assertEqual(tag.name, 'vegetarian')
+
+    def test_an_admin_may_delete_a_tag(self):
+        tag = Tag.objects.create(name='vegan')
+        self.client.force_authenticate(self.boss)
+
+        response = self.client.delete(f'{TAGS_URL}{tag.pk}/')
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Tag.objects.exists())
+
+    def test_a_tag_still_in_use_cannot_be_deleted(self):
+        """Tag.recipe_links is PROTECT, matching RecipeIngredient.ingredient:
+        deleting a tag must not silently untag every recipe that carries it.
+        perform_destroy checks first, so this is a clean 400 naming the
+        count rather than an unhandled 500 from Django's ProtectedError.
+        """
+        tag = Tag.objects.create(name='vegan')
+        RecipeTag.objects.create(recipe=self.recipe, tag=tag)
+        self.client.force_authenticate(self.boss)
+
+        response = self.client.delete(f'{TAGS_URL}{tag.pk}/')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(RecipeTag.objects.exists())
+        self.assertTrue(Tag.objects.filter(pk=tag.pk).exists())
 
 
 class SavedRecipeApiTests(SocialTestCase):
