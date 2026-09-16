@@ -252,6 +252,13 @@ export interface RecipeRow {
   /* RecipeDetailSerializer nests these; the list serializer does not. Present
    * on getRecipe, which is the only caller that needs them. */
   images?: ImageRow[];
+  /* Both serializers return these, but only the detail page reads them, so
+   * they stayed untyped until now - same reasoning as `images` above. `tags`
+   * is names, not labels; lib/categories.ts's tagLabel() converts. */
+  tags?: string[];
+  avg_score?: number | null;
+  save_count?: number;
+  view_count?: number;
 }
 
 export interface StepRow {
@@ -420,4 +427,90 @@ export async function removeRecipeTag(rowId: number) {
 
 export async function unpublishRecipe(recipeId: number) {
   return request(`/recipes/${recipeId}/unpublish/`, { method: "POST" });
+}
+
+/* --------------------------------------------------- ratings and reviews */
+
+export interface RatingRow {
+  rating_id: number;
+  recipe: number;
+  user: { user_id: number; username: string };
+  score: number;
+  created_at: string;
+}
+
+/** Your own rating on this recipe, or null if you have not rated it - the
+ * only shape the score widget needs to decide between POST and PATCH. */
+export async function getMyRating(recipeId: number, userId: number) {
+  const found = rows(
+    await request<Paginated<RatingRow>>(
+      `/social/ratings/?recipe=${recipeId}&user=${userId}`
+    )
+  );
+  return found[0] ?? null;
+}
+
+export async function createRating(recipeId: number, score: number) {
+  return request<RatingRow>("/social/ratings/", {
+    method: "POST",
+    body: JSON.stringify({ recipe: recipeId, score }),
+  });
+}
+
+/** Changing your mind is a PATCH of the row you already own - the API
+ * refuses a second rating on the same recipe from the same person. */
+export async function updateRating(ratingId: number, score: number) {
+  return request<RatingRow>(`/social/ratings/${ratingId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ score }),
+  });
+}
+
+export interface CommentRow {
+  comment_id: number;
+  recipe: number;
+  user: { user_id: number; username: string };
+  content: string;
+  created_at: string;
+}
+
+export async function listComments(recipeId: number) {
+  return rows(
+    await request<Paginated<CommentRow>>(
+      `/social/comments/?recipe=${recipeId}&ordering=-created_at`
+    )
+  );
+}
+
+export async function postComment(recipeId: number, content: string) {
+  return request<CommentRow>("/social/comments/", {
+    method: "POST",
+    body: JSON.stringify({ recipe: recipeId, content }),
+  });
+}
+
+export async function deleteComment(commentId: number) {
+  return request<void>(`/social/comments/${commentId}/`, { method: "DELETE" });
+}
+
+/* -------------------------------------------------------- saved recipes */
+
+/** Your own saved-recipe row for this recipe, or null - lets the Save button
+ * know its own state without fetching the whole collection. */
+export async function getSavedEntry(recipeId: number) {
+  const found = rows(
+    await request<Paginated<SavedRow>>(`/social/saved/?recipe=${recipeId}`)
+  );
+  return found[0] ?? null;
+}
+
+export async function saveRecipe(recipeId: number) {
+  return request<SavedRow>("/social/saved/", {
+    method: "POST",
+    body: JSON.stringify({ recipe: recipeId }),
+  });
+}
+
+export async function unsaveRecipe(savedRecipeId: number) {
+  return request<void>(`/social/saved/${savedRecipeId}/`, { method: "DELETE" });
 }

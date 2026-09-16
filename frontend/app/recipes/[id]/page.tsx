@@ -1,24 +1,35 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 
 import { AppShell } from "@/components/layout/AppShell";
-import { ComingSoon } from "@/components/ui/ComingSoon";
+import { RecipeDetail } from "@/features/recipes/components/RecipeDetail";
 
 export const metadata: Metadata = {
   title: "Recipe | FlavorShare",
 };
 
-/* Every recipe card links here, so without this page the most-clicked element
- * on the homepage is a 404. The real detail page needs five model fields that
- * do not exist yet - Step.title, Recipe.equipment, Recipe.body, User.bio and
- * User.avatar_url - so it is a separate piece of work, not a stub to fill in.
+/* The minimal version of this page: what the builder already collects,
+ * rendered through the same RecipePreview it uses, plus Ratings & Reviews and
+ * a Save button. Not the full redesign - that one needs Step.title,
+ * Recipe.equipment, Recipe.body, User.bio and User.avatar_url, none of which
+ * exist yet - but Ratings & Reviews had nowhere to attach to without this
+ * much existing first.
+ *
+ * No sign-in gate: guests can read a published recipe, same as the homepage.
+ * RecipeDetail hides the write actions itself for anyone who is not signed
+ * in as a registered user.
  */
-export default function RecipeDetailPage() {
+export default async function RecipeDetailPage({
+  params,
+}: PageProps<"/recipes/[id]">) {
+  const { id } = await params;
+  const recipeId = Number(id);
+
+  if (!Number.isInteger(recipeId) || recipeId <= 0) notFound();
+
   return (
     <AppShell>
-      <ComingSoon
-        title="Recipe pages are on the way"
-        blurb="The full recipe - ingredients, steps, photos and nutrition - will open here. Until then the homepage shows what has been published."
-      />
+      <RecipeDetail recipeId={recipeId} />
     </AppShell>
   );
 }
