@@ -142,7 +142,21 @@ class RecipeAdmin(admin.ModelAdmin):
     # created_at and updated_at are auto_now_add/auto_now. view_count is
     # maintained by RecipeViewSet.retrieve, and hand-editing it would quietly
     # falsify the dashboard's "most viewed" report.
-    readonly_fields = ('created_at', 'updated_at', 'view_count')
+    #
+    # The three provenance fields are readonly for a sharper reason: a form
+    # saves an untouched nullable CharField as '', not None, and the unique
+    # constraint treats two ''s as equal where it ignores two NULLs. Opening
+    # any hand-written recipe in the admin and pressing Save would rewrite its
+    # external_id from NULL to '' - and the second recipe that happened to
+    # would be refused. Shown, never typed into.
+    readonly_fields = (
+        'created_at',
+        'updated_at',
+        'view_count',
+        'source',
+        'external_id',
+        'source_url',
+    )
 
     inlines = (RecipeIngredientInline, StepInline, ImageInline)
 
@@ -219,6 +233,18 @@ class RecipeAdmin(admin.ModelAdmin):
                 'description': (
                     'The publish gate applies here as well as through the '
                     'API - see the note on the status field.'
+                ),
+            },
+        ),
+        (
+            'Provenance',
+            {
+                'fields': ('source', 'external_id', 'source_url'),
+                'description': (
+                    'Blank source means someone wrote this recipe here. '
+                    'Otherwise it was pulled in by an import command, and '
+                    'these identify the original. Read-only - re-run the '
+                    'import to change them.'
                 ),
             },
         ),

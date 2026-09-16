@@ -16,14 +16,18 @@ import {
   deleteStep,
   getRecipe,
   listIngredients,
+  listRecipeTags,
   listSteps,
+  addRecipeTag,
   publishRecipe,
+  removeRecipeTag,
   reorderSteps,
   updateIngredient,
   updateRecipe,
   updateStep,
   uploadRecipeImage,
 } from "@/features/recipes/api";
+import { TAG_LABELS, tagLabel, tagName } from "@/lib/categories";
 import { RecipePreview } from "@/features/recipes/components/RecipePreview";
 import { refreshCollectionCounts } from "@/lib/collectionCounts";
 import { useSession } from "@/lib/useSession";
@@ -171,6 +175,11 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const [notice, setNotice] = useState("");
   const [inFlight, setInFlight] = useState(0);
   const [dragging, setDragging] = useState<number | null>(null);
+  /* Only the tags this recipe carries. The chip row renders TAG_LABELS and
+   * looks each one up here, so an unknown tag applied through the admin still
+   * shows rather than disappearing. */
+  const [tags, setTags] = useState<{ name: string; rowId: number }[]>([]);
+  const [tagError, setTagError] = useState("");
   const [mode, setMode] = useState<"edit" | "preview">("edit");
   const coverInput = useRef<HTMLInputElement>(null);
 
@@ -226,10 +235,11 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
     (async () => {
       try {
-        const [recipe, stepRows, ingredientRows] = await Promise.all([
+        const [recipe, stepRows, ingredientRows, tagRows] = await Promise.all([
           getRecipe(recipeId),
           listSteps(recipeId),
           listIngredients(recipeId),
+          listRecipeTags(recipeId),
         ]);
         if (cancelled) return;
 
@@ -257,6 +267,9 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
          * on one that survived a deletion. */
         nextNumber.current =
           Math.max(0, ...stepRows.map((row) => row.step_number)) + 1;
+        setTags(
+          tagRows.map((row) => ({ name: row.tag.name, rowId: row.recipe_tag_id }))
+        );
         setCoverPreview(recipe.images?.find((i) => i.type === "final")?.url ?? null);
         setCoverImageId(recipe.images?.find((i) => i.type === "final")?.image_id ?? null);
 
@@ -710,6 +723,39 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     }
   });
 
+  /* ------------------------------------------------------------------ tags */
+
+  /** Apply or remove one tag. Keyed per tag, so two toggled quickly cannot
+   * collide - and so a failure on one leaves the others alone. */
+  const toggleTag = (label: string) =>
+    busy(() =>
+      runExclusive(`tag:${label}`, async () => {
+        const recipe = ids.current.recipe;
+        if (!recipe) return;
+
+        const name = tagName(label);
+        const applied = tags.find((t) => t.name === name);
+        setTagError("");
+
+        try {
+          if (applied) {
+            await removeRecipeTag(applied.rowId);
+            setTags((current) => current.filter((t) => t.name !== name));
+          } else {
+            const created = await addRecipeTag(recipe, name);
+            setTags((current) => [
+              ...current,
+              { name, rowId: created.recipe_tag_id },
+            ]);
+          }
+        } catch (error) {
+          setTagError(
+            error instanceof ApiError ? error.message : "Could not change that tag."
+          );
+        }
+      })
+    )();
+
   /* ------------------------------------------------------------- reordering */
 
   /** Send the new order, then renumber locally to match. */
@@ -912,6 +958,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           cuisine={cuisine}
           difficulty={difficulty}
           cover={coverPreview}
+          tags={tags.map((t) => tagLabel(t.name))}
           ingredients={ingredients}
           steps={steps}
           author={user?.username}
@@ -1059,6 +1106,54 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           </select>
         </label>
       </div>
+
+      <section className="mt-10">
+        <h2 className="font-display text-xl font-semibold text-ink">Tags</h2>
+        <p className="mt-1 text-sm text-muted">
+          How people find this recipe when browsing.
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {TAG_LABELS.map((label) => {
+            const applied = tags.some((t) => t.name === tagName(label));
+
+            return (
+              <button
+                key={label}
+                type="button"
+                onClick={() => toggleTag(label)}
+                disabled={locked}
+                aria-pressed={applied}
+                className={`rounded-full border px-4 py-2 font-display text-xs font-semibold transition-colors disabled:opacity-40 ${
+                  applied
+                    ? "border-maroon bg-maroon text-card"
+                    : "border-rule text-slate hover:bg-panel hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* A tag applied before this list existed - through the admin, say -
+          * still shows, so nothing silently disappears from a recipe. */}
+        {tags.some((t) => !TAG_LABELS.some((l) => tagName(l) === t.name)) && (
+          <p className="mt-3 text-xs text-muted">
+            Also tagged:{" "}
+            {tags
+              .filter((t) => !TAG_LABELS.some((l) => tagName(l) === t.name))
+              .map((t) => tagLabel(t.name))
+              .join(", ")}
+          </p>
+        )}
+
+        {tagError && (
+          <p role="alert" className="mt-3 text-sm text-red-600">
+            {tagError}
+          </p>
+        )}
+      </section>
 
       {/* --------------------------------------------------------- ingredients */}
       <section className="mt-12">

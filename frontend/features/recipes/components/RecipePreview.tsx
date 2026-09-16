@@ -38,6 +38,7 @@ type Props = {
   cuisine: string;
   difficulty: string;
   cover: string | null;
+  tags: string[];
   ingredients: PreviewIngredient[];
   steps: PreviewStep[];
   author?: string;
@@ -76,6 +77,7 @@ export function RecipePreview({
   cuisine,
   difficulty,
   cover,
+  tags,
   ingredients,
   steps,
   author,
@@ -108,6 +110,19 @@ export function RecipePreview({
               </Meta>
             )}
             {cuisine.trim() && <Meta icon={PLATE}>{cuisine.trim()}</Meta>}
+          </div>
+        )}
+
+        {tags.length > 0 && (
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+            {tags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-panel px-3 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-maroon"
+              >
+                {tag}
+              </span>
+            ))}
           </div>
         )}
       </header>

@@ -104,6 +104,7 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | `CLOUDINARY_API_SECRET` | for uploads | *from your dashboard* | Secret half. Server-side only — never put this in the frontend. |
 | `BREVO_API_KEY` | for signup & reset | `xkeysib-xxxxxxxx` | Sends verification and password-reset codes. Server-side only. |
 | `BREVO_FROM_EMAIL` | for signup & reset | `FlavorShare <you@gmail.com>` | The From address. Must be a real mailbox you control — see below. |
+| `THEMEALDB_API_KEY` | no | `1` | Used only by `python manage.py import_themealdb`, which seeds the catalogue from [TheMealDB](https://www.themealdb.com/api.php). Defaults to `1`, TheMealDB's own free/test key — no signup needed unless it starts throttling. |
 
 The three `CLOUDINARY_*` keys are needed only for image uploads. Leave them
 out and everything else runs; `POST /api/recipes/images/upload/` answers
@@ -134,6 +135,12 @@ here — Resend's unverified sandbox sender could only deliver to the account
 owner's own inbox, so nobody else could ever receive a code. The tradeoff is
 that mail from an unverified domain is likelier to land in spam, so check the
 spam folder before assuming something is broken.
+
+`THEMEALDB_API_KEY` needs no setup at all — leave it out and the default
+still works. Run `python manage.py import_themealdb` (optionally with
+`--limit N` or `--category "Vegetarian"`) to pull public recipes in as
+ordinary published rows, owned by a service account so they show up credited
+rather than authorless.
 
 Generate your own `SECRET_KEY`:
 

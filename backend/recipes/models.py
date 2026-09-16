@@ -134,12 +134,56 @@ class Recipe(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # source VARCHAR(50) NOT NULL DEFAULT ''   [not in flavorshare.sql]
+    # external_id VARCHAR(50)                  [not in flavorshare.sql]
+    # source_url VARCHAR(255)                  [not in flavorshare.sql]
+    #
+    # Where the recipe came from. Empty source means a person wrote it here,
+    # which is every row that existed before these columns; 'themealdb' means
+    # the import command pulled it from the public recipe API. Three columns on
+    # Recipe rather than a table of their own: an imported meal is an ordinary
+    # recipe in every other respect - it is saved, rated, tagged and featured
+    # through the same rows as any other - and a side table would have to be
+    # joined by everything that touches a recipe to answer one question.
+    #
+    # source_url is the original page, kept so the recipe page can credit it.
+    source = models.CharField(max_length=50, default='', blank=True)
+    external_id = models.CharField(max_length=50, null=True, default=None, blank=True)
+    source_url = models.URLField(max_length=255, null=True, blank=True)
+
     class Meta:
         db_table = 'Recipe'
         ordering = ['-created_at']
         indexes = [
             # Nearly every public query filters to published recipes.
             models.Index(fields=['status'], name='recipe_status_idx'),
+        ]
+        constraints = [
+            # One row per imported meal, so re-running the import updates
+            # rather than doubling the catalogue.
+            #
+            # Deliberately NOT condition=~Q(source=''). That spelling reads
+            # better - "only constrain the imported rows" - and on MySQL it
+            # does nothing whatsoever. MySQL has no partial indexes, so
+            # UniqueConstraint.create_sql() returns None: no error, no
+            # migration difference, simply no index. Measured, not assumed.
+            #
+            # The warning for it (models.W036) is off by default - plain
+            # `manage.py check` reports no issues, and only
+            # `check --database default` prints it - so nothing in an ordinary
+            # run would have told us. ProvenanceTests asks the connection
+            # whether the index exists for exactly this reason.
+            #
+            # A plain constraint needs no condition. NULLs never compare equal
+            # in a SQL unique index, so every user-written recipe carries
+            # external_id IS NULL and none of them collide with each other.
+            # That is also why external_id defaults to None rather than '':
+            # two empty strings *would* collide, and the second user recipe
+            # would be rejected.
+            models.UniqueConstraint(
+                fields=['source', 'external_id'],
+                name='unique_recipe_per_source',
+            ),
         ]
 
     def __str__(self):
