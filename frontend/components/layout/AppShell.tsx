@@ -55,6 +55,12 @@ const NAV = [
       /^\/recipes\/\d+\/edit$/.test(p),
     icon: "M6 4h11a1 1 0 0 1 1 1v15l-6-3-6 3V5a1 1 0 0 1 1-1z",
   },
+  {
+    label: "Meal plans",
+    href: "/me/meal-plans",
+    active: (p: string) => p.startsWith("/me/meal-plans"),
+    icon: "M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5.5zM4 9.5h16M8 3v3M16 3v3",
+  },
 ];
 
 /* Help sits at the foot of the rail rather than in the nav above. It is not

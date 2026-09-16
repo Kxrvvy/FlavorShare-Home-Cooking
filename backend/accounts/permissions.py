@@ -82,6 +82,25 @@ class IsRegisteredUserOrReadOnly(BasePermission):
         return _is_registered(request.user)
 
 
+class IsAdminOrReadOnly(BasePermission):
+    """Anyone may read; only an admin may write.
+
+    For a shared lookup table that guests and registered users both read
+    without being signed in, but that only the admin panel edits - TagViewSet,
+    where "registered users may write" (IsRegisteredUserOrReadOnly's rule)
+    would let anyone rename or delete a tag out from under every recipe
+    carrying it.
+    """
+
+    message = 'Only administrators may perform this action.'
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_admin)
+
+
 class IsOwnerOrReadOnly(BasePermission):
     """Object-level: anyone may read, only the owner may modify.
 

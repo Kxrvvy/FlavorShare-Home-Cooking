@@ -277,6 +277,7 @@ class RecipeListSerializer(serializers.ModelSerializer):
             'servings',
             'difficulty',
             'status',
+            'featured',
             'view_count',
             'cover_image',
             'tags',

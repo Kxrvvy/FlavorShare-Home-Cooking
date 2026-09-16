@@ -53,7 +53,11 @@ async function send(path: string, init: RequestInit): Promise<Response> {
   });
 }
 
-async function request<T>(
+/* Exported for other feature modules (features/dashboard/api.ts) rather than
+ * duplicated - the 401-retry-once behaviour above is exactly the kind of
+ * thing two copies would drift on, the same reason API_BASE_URL moved out of
+ * this file's earlier, page-local copies. */
+export async function request<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
@@ -259,6 +263,8 @@ export interface RecipeRow {
   avg_score?: number | null;
   save_count?: number;
   view_count?: number;
+  /** Curated by an admin, not derived - see Recipe.featured in models.py. */
+  featured?: boolean;
 }
 
 export interface StepRow {
@@ -275,12 +281,15 @@ export interface IngredientRow {
   unit: string | null;
 }
 
-interface Paginated<T> {
+export interface Paginated<T> {
+  count?: number;
+  next?: string | null;
+  previous?: string | null;
   results?: T[];
 }
 
 /** DRF paginates the child lists; a recipe's rows always fit one page. */
-function rows<T>(payload: Paginated<T> | T[]): T[] {
+export function rows<T>(payload: Paginated<T> | T[]): T[] {
   return Array.isArray(payload) ? payload : payload.results ?? [];
 }
 
@@ -310,6 +319,28 @@ export async function listMyRecipes(userId: number) {
     `/recipes/?user=${userId}&ordering=-created_at`
   );
   return rows(payload);
+}
+
+/** Every recipe, drafts included - only an admin's own token can reach the
+ * drafts, since visible_recipes() is what returns them at all. The whole
+ * paginated payload comes back, not just the rows, so a caller can page. */
+export async function listAllRecipes(params: {
+  search?: string;
+  status?: "draft" | "published";
+  user?: number;
+  tag?: string;
+  ordering?: string;
+  page?: number;
+} = {}) {
+  const query = new URLSearchParams();
+  if (params.search) query.set("search", params.search);
+  if (params.status) query.set("status", params.status);
+  if (params.user) query.set("user", String(params.user));
+  if (params.tag) query.set("tag", params.tag);
+  query.set("ordering", params.ordering ?? "-created_at");
+  if (params.page) query.set("page", String(params.page));
+
+  return request<Paginated<RecipeRow>>(`/recipes/?${query.toString()}`);
 }
 
 /* Sorted here, because the endpoint does not.

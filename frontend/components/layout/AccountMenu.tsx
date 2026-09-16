@@ -140,12 +140,28 @@ export function AccountMenu({ compact = false, onNavigate }: Props) {
             My recipes
           </Link>
 
-          {/* Admins reach moderation and reporting through Django admin for now;
-            * saying so beats a link to a route that does not exist yet. */}
+          <Link
+            href="/me/meal-plans"
+            onClick={() => {
+              setOpen(false);
+              onNavigate?.();
+            }}
+            className="mt-2 block rounded-full border border-rule py-2 text-center font-display text-xs font-medium uppercase tracking-widest text-ink transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
+          >
+            Meal plans
+          </Link>
+
           {user.role === "admin" && (
-            <p className="mt-2 font-display text-xs font-medium uppercase tracking-widest text-maroon">
-              Admin
-            </p>
+            <Link
+              href="/admin"
+              onClick={() => {
+                setOpen(false);
+                onNavigate?.();
+              }}
+              className="mt-2 block rounded-full border border-rule py-2 text-center font-display text-xs font-medium uppercase tracking-widest text-maroon transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
+            >
+              Admin dashboard
+            </Link>
           )}
 
           <button
