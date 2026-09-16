@@ -13,7 +13,8 @@ starts from the photo, not from the recipe it happens to sit in.
 """
 
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.core.exceptions import ValidationError
 
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 
@@ -124,11 +125,12 @@ class RecipeAdmin(admin.ModelAdmin):
         'user',
         'cuisine_type',
         'status',
+        'featured',
         'difficulty',
         'view_count',
         'created_at',
     )
-    list_filter = ('status', 'difficulty', 'cuisine_type')
+    list_filter = ('status', 'featured', 'difficulty', 'cuisine_type')
     search_fields = ('title', 'description', 'user__username')
     ordering = ('-created_at',)
     autocomplete_fields = ('user',)
@@ -140,12 +142,77 @@ class RecipeAdmin(admin.ModelAdmin):
     # created_at and updated_at are auto_now_add/auto_now. view_count is
     # maintained by RecipeViewSet.retrieve, and hand-editing it would quietly
     # falsify the dashboard's "most viewed" report.
-    readonly_fields = ('created_at', 'updated_at', 'view_count')
+    #
+    # The three provenance fields are readonly for a sharper reason: a form
+    # saves an untouched nullable CharField as '', not None, and the unique
+    # constraint treats two ''s as equal where it ignores two NULLs. Opening
+    # any hand-written recipe in the admin and pressing Save would rewrite its
+    # external_id from NULL to '' - and the second recipe that happened to
+    # would be refused. Shown, never typed into.
+    readonly_fields = (
+        'created_at',
+        'updated_at',
+        'view_count',
+        'source',
+        'external_id',
+        'source_url',
+    )
 
     inlines = (RecipeIngredientInline, StepInline, ImageInline)
 
+    actions = ('feature_recipes', 'unfeature_recipes')
+
+    @admin.action(description='Feature selected recipes')
+    def feature_recipes(self, request, queryset):
+        """Tick `featured`, one row at a time.
+
+        Deliberately not queryset.update(): that writes straight to SQL and
+        never calls Recipe.clean(), so a draft would be featured silently -
+        into a panel that visible_recipes() hides it from. Looping costs a
+        query per row on a handful of rows and lets the message say which ones
+        were skipped and why.
+        """
+        featured, skipped = 0, []
+
+        for recipe in queryset:
+            recipe.featured = True
+            try:
+                recipe.full_clean()
+            except ValidationError:
+                skipped.append(recipe.title)
+                continue
+            recipe.save(update_fields=['featured', 'updated_at'])
+            featured += 1
+
+        if featured:
+            self.message_user(
+                request,
+                f'Featured {featured} recipe{"" if featured == 1 else "s"}.',
+                messages.SUCCESS,
+            )
+
+        if skipped:
+            self.message_user(
+                request,
+                'Not featured, because only a published recipe can be: '
+                + ', '.join(skipped),
+                messages.WARNING,
+            )
+
+    @admin.action(description='Remove selected recipes from featured')
+    def unfeature_recipes(self, request, queryset):
+        """Untick it. Safe as a bulk update - clean() only refuses the tick,
+        never its removal, so there is nothing per row to check."""
+        cleared = queryset.filter(featured=True).update(featured=False)
+        self.message_user(
+            request,
+            f'Removed {cleared} recipe{"" if cleared == 1 else "s"} from featured.',
+            messages.SUCCESS,
+        )
+
     fieldsets = (
         (None, {'fields': ('title', 'user', 'description')}),
+        ('Curation', {'fields': ('featured',)}),
         (
             'Details',
             {
@@ -166,6 +233,18 @@ class RecipeAdmin(admin.ModelAdmin):
                 'description': (
                     'The publish gate applies here as well as through the '
                     'API - see the note on the status field.'
+                ),
+            },
+        ),
+        (
+            'Provenance',
+            {
+                'fields': ('source', 'external_id', 'source_url'),
+                'description': (
+                    'Blank source means someone wrote this recipe here. '
+                    'Otherwise it was pulled in by an import command, and '
+                    'these identify the original. Read-only - re-run the '
+                    'import to change them.'
                 ),
             },
         ),

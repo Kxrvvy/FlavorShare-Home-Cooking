@@ -20,7 +20,7 @@ export default function HomePage() {
   const explore = getExplore();
 
   return (
-    <AppShell action={<CreateRecipeButton variant="action" />}>
+    <AppShell action={<CreateRecipeButton />}>
       <Hero recipes={trending.results} />
       <FeaturedRecipes recipes={featured.results} />
       <ExploreRecipes recipes={explore.results} />

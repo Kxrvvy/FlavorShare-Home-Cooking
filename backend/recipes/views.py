@@ -168,12 +168,13 @@ class RecipeViewSet(viewsets.ModelViewSet):
         recipes = recipes.order_by('-created_at', '-recipe_id')
 
         if self.action == 'list':
-            # cover_image reads recipe.images in Python, so without this the
-            # list fans out into one query per row.
-            return recipes.prefetch_related('images')
+            # cover_image and tags both read already-loaded rows in Python, so
+            # without these the list fans out into two queries per row.
+            return recipes.prefetch_related('images', 'recipe_tags__tag')
 
         return recipes.prefetch_related(
             'images',
+            'recipe_tags__tag',
             'steps__images',
             'recipe_ingredients__ingredient',
         )

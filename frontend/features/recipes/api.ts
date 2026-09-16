@@ -393,6 +393,31 @@ export async function listSavedRecipes() {
   return rows(await request<Paginated<SavedRow>>("/social/saved/?ordering=-saved_at"));
 }
 
+export interface RecipeTagRow {
+  recipe_tag_id: number;
+  tag: { tag_id: number; name: string };
+}
+
+export async function listRecipeTags(recipeId: number) {
+  return rows(
+    await request<Paginated<RecipeTagRow>>(`/social/recipe-tags/?recipe=${recipeId}`)
+  );
+}
+
+/* `tag_name` is plain text and the shared Tag row is found or created for you -
+ * the same shape addIngredient uses. The name must already be normalised the
+ * way Tag.save() will store it; lib/categories.ts does that. */
+export async function addRecipeTag(recipeId: number, name: string) {
+  return request<RecipeTagRow>("/social/recipe-tags/", {
+    method: "POST",
+    body: JSON.stringify({ recipe: recipeId, tag_name: name }),
+  });
+}
+
+export async function removeRecipeTag(rowId: number) {
+  return request<void>(`/social/recipe-tags/${rowId}/`, { method: "DELETE" });
+}
+
 export async function unpublishRecipe(recipeId: number) {
   return request(`/recipes/${recipeId}/unpublish/`, { method: "POST" });
 }

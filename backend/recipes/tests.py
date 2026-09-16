@@ -9,23 +9,27 @@ recipe that has no content yet.
 
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cloudinary.exceptions import Error as CloudinaryError
 from django.conf import settings
 from django.contrib import admin as django_admin
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.db.models import Count, ProtectedError
+from django.db import connection
 from django.test import RequestFactory, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .admin import ImageAdmin, ImageInline
 from .filters import RecipeFilterSet
+from .sources import THEMEALDB, service_account, source_label
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 from .serializers import (
     ImageSerializer,
@@ -92,6 +96,149 @@ class RecipeDefaultsTests(RecipeTestCase):
     def test_timestamps_are_set(self):
         self.assertIsNotNone(self.recipe.created_at)
         self.assertIsNotNone(self.recipe.updated_at)
+
+
+class ProvenanceTests(RecipeTestCase):
+    """Where a recipe came from, and the constraint that keeps imports honest.
+
+    The import command re-runs, so `unique_recipe_per_source` is the only thing
+    standing between a refresh and a doubled catalogue. These tests exist mainly
+    to fail loudly if someone later rewrites it as the more readable
+    condition=~Q(source='') - which MySQL discards entirely.
+    """
+
+    def test_a_hand_written_recipe_has_no_source(self):
+        self.assertEqual(self.recipe.source, '')
+        self.assertIsNone(self.recipe.external_id)
+        self.assertIsNone(self.recipe.source_url)
+
+    def test_external_id_defaults_to_null_not_empty_string(self):
+        """NULLs never collide in a unique index; two empty strings do.
+
+        If this ever becomes '', the second recipe anyone writes is refused.
+        """
+        recipe = Recipe.objects.create(user=self.user, title='Another')
+        self.assertIsNone(recipe.external_id)
+
+    def test_many_hand_written_recipes_coexist(self):
+        for title in ('one', 'two', 'three'):
+            Recipe.objects.create(user=self.user, title=title)
+        self.assertEqual(Recipe.objects.filter(source='').count(), 4)
+
+    def test_the_same_imported_meal_cannot_be_stored_twice(self):
+        Recipe.objects.create(
+            user=self.user, title='Teriyaki',
+            source='themealdb', external_id='52772',
+        )
+        with self.assertRaises(IntegrityError):
+            Recipe.objects.create(
+                user=self.user, title='Teriyaki again',
+                source='themealdb', external_id='52772',
+            )
+
+    def test_different_meals_from_one_source_are_fine(self):
+        Recipe.objects.create(
+            user=self.user, title='A', source='themealdb', external_id='52772',
+        )
+        Recipe.objects.create(
+            user=self.user, title='B', source='themealdb', external_id='52773',
+        )
+        self.assertEqual(Recipe.objects.filter(source='themealdb').count(), 2)
+
+    def test_the_same_id_from_two_sources_is_fine(self):
+        """The id is only unique within its provider."""
+        Recipe.objects.create(
+            user=self.user, title='A', source='themealdb', external_id='1',
+        )
+        Recipe.objects.create(
+            user=self.user, title='B', source='elsewhere', external_id='1',
+        )
+        self.assertEqual(Recipe.objects.exclude(source='').count(), 2)
+
+    def test_the_constraint_really_exists_in_the_database(self):
+        """Not just declared on the model.
+
+        A partial constraint is dropped silently on MySQL - no error, no
+        migration difference, just no index. Asking the connection directly is
+        the only way to tell the difference.
+        """
+        constraints = connection.introspection.get_constraints(
+            connection.cursor(), Recipe._meta.db_table,
+        )
+        match = constraints.get('unique_recipe_per_source')
+        self.assertIsNotNone(
+            match, 'unique_recipe_per_source was not created on this database',
+        )
+        self.assertTrue(match['unique'])
+        self.assertEqual(match['columns'], ['source', 'external_id'])
+
+
+class ServiceAccountTests(TestCase):
+    """The account that owns imported recipes.
+
+    It cannot be deleted once it owns anything (Recipe.user is PROTECT), so the
+    guarantee that nobody can sign in as it is the only thing limiting the
+    damage if its username leaks. These tests are that guarantee.
+    """
+
+    def test_it_is_created_on_first_call(self):
+        User = get_user_model()
+        self.assertFalse(User.objects.filter(username=THEMEALDB).exists())
+        account = service_account()
+        self.assertEqual(account.username, THEMEALDB)
+
+    def test_calling_twice_returns_the_same_row(self):
+        """The import command calls this on every run."""
+        first = service_account()
+        second = service_account()
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(get_user_model().objects.filter(username=THEMEALDB).count(), 1)
+
+    def test_it_has_no_usable_password(self):
+        self.assertFalse(service_account().has_usable_password())
+
+    def test_nobody_can_sign_in_as_it(self):
+        """The point of the unusable password, stated as behaviour."""
+        account = service_account()
+        for attempt in ('', 'themealdb', 'password', account.password):
+            self.assertIsNone(
+                authenticate(username=THEMEALDB, password=attempt),
+                f'signed in with {attempt!r}',
+            )
+
+    def test_it_is_an_ordinary_registered_user(self):
+        account = service_account()
+        self.assertEqual(account.role, get_user_model().Role.REGISTERED)
+        self.assertFalse(account.is_admin)
+        self.assertFalse(account.is_staff)
+        self.assertFalse(account.is_superuser)
+
+    def test_its_email_can_never_receive_mail(self):
+        """RFC 2606 reserves .invalid, so no password reset can complete."""
+        self.assertTrue(service_account().email.endswith('.invalid'))
+
+    def test_it_can_own_a_recipe(self):
+        """The whole reason it exists."""
+        recipe = Recipe.objects.create(
+            user=service_account(), title='Teriyaki',
+            source=THEMEALDB, external_id='52772',
+        )
+        self.assertEqual(recipe.user.username, THEMEALDB)
+
+    def test_it_cannot_be_deleted_once_it_owns_a_recipe(self):
+        account = service_account()
+        Recipe.objects.create(
+            user=account, title='Teriyaki',
+            source=THEMEALDB, external_id='52772',
+        )
+        with self.assertRaises(ProtectedError):
+            account.delete()
+
+    def test_the_label_is_reader_facing(self):
+        self.assertEqual(source_label(THEMEALDB), 'TheMealDB')
+
+    def test_an_unknown_source_falls_back_to_its_key(self):
+        self.assertEqual(source_label('elsewhere'), 'elsewhere')
 
 
 class UserDeletionTests(RecipeTestCase):
@@ -1745,3 +1892,377 @@ class AuthorFilterTests(BrowseTestCase):
         titles = [r['title'] for r in response.data['results']]
         self.assertIn('Tofu curry', titles)
         self.assertNotIn('Adobo', titles)
+
+
+class FeaturedRuleTests(RecipeTestCase):
+    """A draft may not be featured, wherever the tick comes from."""
+
+    def test_a_published_recipe_can_be_featured(self):
+        self.recipe.status = Recipe.Status.PUBLISHED
+        self.recipe.featured = True
+
+        self.recipe.full_clean()  # must not raise
+
+    def test_a_draft_cannot_be_featured(self):
+        self.recipe.status = Recipe.Status.DRAFT
+        self.recipe.featured = True
+
+        with self.assertRaises(DjangoValidationError) as caught:
+            self.recipe.full_clean()
+
+        self.assertIn('featured', caught.exception.error_dict)
+
+    def test_an_unfeatured_draft_is_fine(self):
+        self.recipe.status = Recipe.Status.DRAFT
+        self.recipe.featured = False
+
+        self.recipe.full_clean()
+
+    def test_save_does_not_enforce_it(self):
+        """Documented, not desired: clean() is not called by .save(), so a
+        fixture or a shell session can still write the pair. Worth pinning so
+        nobody assumes the column is self-defending."""
+        self.recipe.status = Recipe.Status.DRAFT
+        self.recipe.featured = True
+        self.recipe.save()
+
+        self.recipe.refresh_from_db()
+        self.assertTrue(self.recipe.featured)
+
+
+class FeaturedApiTests(BrowseTestCase):
+    """?featured=true, and what the API will and will not accept."""
+
+    def setUp(self):
+        self.curry.featured = True
+        self.curry.save(update_fields=['featured'])
+
+    def test_the_filter_narrows_to_featured(self):
+        response = self.client.get(f'{RECIPES_URL}?featured=true')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertEqual(titles, ['Tofu curry'])
+
+    def test_featured_false_excludes_them(self):
+        response = self.client.get(f'{RECIPES_URL}?featured=false')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertNotIn('Tofu curry', titles)
+        self.assertIn('Adobo', titles)
+
+    def test_a_featured_draft_is_still_invisible_to_a_guest(self):
+        """visible_recipes() decides first, so featuring cannot leak a draft
+        even if one somehow carries the flag."""
+        self.draft.featured = True
+        self.draft.save(update_fields=['featured'])
+
+        response = self.client.get(f'{RECIPES_URL}?featured=true')
+
+        titles = [r['title'] for r in response.data['results']]
+        self.assertNotIn('Secret sinigang', titles)
+
+    def test_the_api_refuses_to_feature_a_draft(self):
+        self.client.force_authenticate(self.author)
+
+        response = self.client.patch(
+            f'{RECIPES_URL}{self.draft.pk}/',
+            {'featured': True},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('featured', response.data)
+
+    def test_unpublishing_clears_the_feature(self):
+        """The alternative - refusing the unpublish - is the wrong failure: an
+        admin taking something out of public view needs that to work."""
+        self.client.force_authenticate(self.author)
+
+        response = self.client.post(f'{RECIPES_URL}{self.curry.pk}/unpublish/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.curry.refresh_from_db()
+        self.assertEqual(self.curry.status, Recipe.Status.DRAFT)
+        self.assertFalse(self.curry.featured)
+
+
+class FeaturedAdminActionTests(TestCase):
+    """The bulk actions, which never reach Recipe.clean() on their own."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.boss = User.objects.create_superuser(
+            username='chief',
+            email='chief@example.com',
+            password='n0t-a-real-password',
+        )
+        cls.live = Recipe.objects.create(
+            user=cls.boss, title='Live one', status=Recipe.Status.PUBLISHED)
+        cls.draft = Recipe.objects.create(
+            user=cls.boss, title='Draft one', status=Recipe.Status.DRAFT)
+
+    def setUp(self):
+        self.client.force_login(self.boss)
+
+    def run_action(self, action, recipes):
+        return self.client.post(
+            reverse('admin:recipes_recipe_changelist'),
+            {
+                'action': action,
+                '_selected_action': [str(r.pk) for r in recipes],
+            },
+            follow=True,
+        )
+
+    def test_featuring_a_published_recipe_works(self):
+        self.run_action('feature_recipes', [self.live])
+
+        self.live.refresh_from_db()
+        self.assertTrue(self.live.featured)
+
+    def test_featuring_a_draft_is_skipped_and_reported(self):
+        response = self.run_action('feature_recipes', [self.draft])
+
+        self.draft.refresh_from_db()
+        self.assertFalse(self.draft.featured)
+        self.assertContains(response, 'only a published recipe can be')
+
+    def test_a_mixed_selection_features_what_it_can(self):
+        """The reason the action loops instead of calling queryset.update():
+        one bad row must not take the good ones with it, or silently pass."""
+        self.run_action('feature_recipes', [self.live, self.draft])
+
+        self.live.refresh_from_db()
+        self.draft.refresh_from_db()
+        self.assertTrue(self.live.featured)
+        self.assertFalse(self.draft.featured)
+
+    def test_unfeaturing(self):
+        self.live.featured = True
+        self.live.save(update_fields=['featured'])
+
+        self.run_action('unfeature_recipes', [self.live])
+
+        self.live.refresh_from_db()
+        self.assertFalse(self.live.featured)
+
+
+class RecipeTagsPayloadTests(BrowseTestCase):
+    """Tag names on the list payload, and what keeps them affordable."""
+
+    def test_tags_come_back_as_names(self):
+        response = self.client.get(f'{RECIPES_URL}{self.curry.pk}/')
+
+        self.assertEqual(response.data['tags'], ['gluten-free', 'vegan'])
+
+    def test_they_are_sorted_not_in_insertion_order(self):
+        """Two recipes carrying the same tags should render them the same way
+        round, whatever order they happened to be applied in."""
+        response = self.client.get(f'{RECIPES_URL}{self.feast.pk}/')
+
+        self.assertEqual(
+            response.data['tags'],
+            sorted(response.data['tags']),
+        )
+
+    def test_an_untagged_recipe_reports_an_empty_list(self):
+        """Empty, not null - "no tags" is a real answer and the client renders
+        a list either way."""
+        response = self.client.get(f'{RECIPES_URL}{self.adobo.pk}/')
+
+        self.assertEqual(response.data['tags'], [])
+
+    def test_the_list_carries_them_too(self):
+        response = self.client.get(RECIPES_URL)
+
+        by_title = {r['title']: r['tags'] for r in response.data['results']}
+        self.assertEqual(by_title['Tofu curry'], ['gluten-free', 'vegan'])
+        self.assertEqual(by_title['Adobo'], [])
+
+    def test_more_recipes_do_not_cost_more_queries(self):
+        """The prefetch is the point. get_tags scans loaded rows in Python
+        precisely so one is enough; without it every recipe on the page costs
+        a query of its own.
+        """
+        from social.models import RecipeTag, Tag
+
+        # Six recipes at this point; eleven after the loop below. Both fit one
+        # page - PAGE_SIZE is 20 and there is no page_size query parameter - so
+        # what changes between the two measurements is only the row count.
+        with CaptureQueriesContext(connection) as small:
+            self.client.get(RECIPES_URL)
+
+        spare = Tag.objects.create(name='weeknight')
+        for index in range(5):
+            extra = Recipe.objects.create(
+                user=self.author,
+                title=f'Filler {index}',
+                status=Recipe.Status.PUBLISHED,
+            )
+            RecipeTag.objects.create(recipe=extra, tag=spare)
+
+        with CaptureQueriesContext(connection) as bigger:
+            self.client.get(RECIPES_URL)
+
+        self.assertEqual(len(bigger), len(small))
+
+
+def _themealdb_response(payload):
+    """A stand-in for requests.Response: only .json() is ever called on it."""
+    return SimpleNamespace(json=lambda: payload)
+
+
+def _fake_meal(meal_id='52977', title='Corba', **overrides):
+    """One TheMealDB lookup.php meal object, trimmed to what the command reads."""
+    meal = {
+        'idMeal': meal_id,
+        'strMeal': title,
+        'strArea': 'Turkish',
+        'strInstructions': 'Rinse the lentils.\nSimmer until soft.\nBlend and serve.',
+        'strMealThumb': f'https://www.themealdb.com/images/media/meals/{meal_id}.jpg',
+        'strSource': 'https://example.com/corba',
+        'strYoutube': 'https://youtube.com/watch?v=example',
+        'strIngredient1': 'Lentils',
+        'strMeasure1': '1 cup',
+        'strIngredient2': 'Onion',
+        'strMeasure2': '1',
+        'strIngredient3': '',
+        'strMeasure3': '',
+    }
+    meal.update(overrides)
+    return meal
+
+
+class ImportTheMealDBTests(TestCase):
+    """`manage.py import_themealdb`, with requests.Session mocked throughout -
+    no test here ever reaches the real network.
+    """
+
+    def _run(self, categories, meals_by_category, meals_by_id, **options):
+        """Drive the command against canned category/filter/lookup responses.
+
+        `categories`: TheMealDB category names, as categories.php would list.
+        `meals_by_category`: {category: [meal_id, ...]}, as filter.php would.
+        `meals_by_id`: {meal_id: full meal dict}, as lookup.php would.
+        """
+        def fake_get(url, params=None, timeout=None):
+            if url.endswith('categories.php'):
+                payload = {
+                    'categories': [{'strCategory': c} for c in categories]
+                }
+            elif url.endswith('filter.php'):
+                ids = meals_by_category.get(params['c'], [])
+                payload = {'meals': [{'idMeal': i} for i in ids]}
+            elif url.endswith('lookup.php'):
+                meal = meals_by_id.get(params['i'])
+                payload = {'meals': [meal] if meal else None}
+            else:
+                raise AssertionError(f'unexpected URL: {url}')
+            return _themealdb_response(payload)
+
+        session = MagicMock()
+        session.get.side_effect = fake_get
+
+        with patch(
+            'recipes.management.commands.import_themealdb.requests.Session',
+            return_value=session,
+        ):
+            call_command('import_themealdb', **options)
+
+        return session
+
+    def test_import_creates_recipe_with_steps_ingredients_and_image(self):
+        meal = _fake_meal()
+        self._run(
+            categories=['Soup'],
+            meals_by_category={'Soup': ['52977']},
+            meals_by_id={'52977': meal},
+        )
+
+        recipe = Recipe.objects.get(source=THEMEALDB, external_id='52977')
+        self.assertEqual(recipe.title, 'Corba')
+        self.assertEqual(recipe.cuisine_type, 'Turkish')
+        self.assertEqual(recipe.status, Recipe.Status.PUBLISHED)
+        self.assertEqual(recipe.user, service_account(THEMEALDB))
+
+        steps = list(recipe.steps.order_by('step_number'))
+        self.assertEqual(
+            [s.instruction for s in steps],
+            ['Rinse the lentils.', 'Simmer until soft.', 'Blend and serve.'],
+        )
+        self.assertEqual([s.step_number for s in steps], [1, 2, 3])
+
+        links = {
+            link.ingredient.name: link.notes
+            for link in recipe.recipe_ingredients.all()
+        }
+        self.assertEqual(links, {'lentils': '1 cup', 'onion': '1'})
+
+        image = recipe.images.get(type=Image.Type.FINAL)
+        self.assertEqual(image.url, meal['strMealThumb'])
+        self.assertEqual(image.uploaded_by, service_account(THEMEALDB))
+
+    def test_rerunning_updates_instead_of_duplicating(self):
+        meal = _fake_meal()
+        run_kwargs = dict(
+            categories=['Soup'],
+            meals_by_category={'Soup': ['52977']},
+            meals_by_id={'52977': meal},
+        )
+        self._run(**run_kwargs)
+
+        updated = dict(meal, strMeal='Corba (updated)')
+        self._run(**{**run_kwargs, 'meals_by_id': {'52977': updated}})
+
+        self.assertEqual(
+            Recipe.objects.filter(source=THEMEALDB, external_id='52977').count(), 1
+        )
+        recipe = Recipe.objects.get(source=THEMEALDB, external_id='52977')
+        self.assertEqual(recipe.title, 'Corba (updated)')
+        # Steps/ingredients/image are replaced, not appended to.
+        self.assertEqual(recipe.steps.count(), 3)
+        self.assertEqual(recipe.recipe_ingredients.count(), 2)
+        self.assertEqual(recipe.images.filter(type=Image.Type.FINAL).count(), 1)
+
+    def test_limit_caps_the_whole_run_not_each_category(self):
+        meals = {
+            str(i): _fake_meal(meal_id=str(i), title=f'Meal {i}') for i in range(5)
+        }
+        self._run(
+            categories=['Soup', 'Stew'],
+            meals_by_category={
+                'Soup': ['0', '1', '2'],
+                'Stew': ['3', '4'],
+            },
+            meals_by_id=meals,
+            limit=2,
+        )
+
+        self.assertEqual(Recipe.objects.filter(source=THEMEALDB).count(), 2)
+
+    def test_repeated_ingredient_column_does_not_collide(self):
+        """TheMealDB sometimes lists one ingredient across two columns; the
+        unique (recipe, ingredient) constraint would reject a naive import
+        that created both rows.
+        """
+        meal = _fake_meal(strIngredient2='Lentils', strMeasure2='extra')
+        self._run(
+            categories=['Soup'],
+            meals_by_category={'Soup': ['52977']},
+            meals_by_id={'52977': meal},
+        )
+
+        recipe = Recipe.objects.get(source=THEMEALDB, external_id='52977')
+        self.assertEqual(recipe.recipe_ingredients.count(), 1)
+        self.assertEqual(recipe.recipe_ingredients.get().notes, 'extra')
+
+    def test_uses_the_configured_api_key_in_every_url(self):
+        with override_settings(THEMEALDB_API_KEY='test-key-123'):
+            session = self._run(
+                categories=[],
+                meals_by_category={},
+                meals_by_id={},
+            )
+
+        for call in session.get.call_args_list:
+            self.assertIn('/test-key-123/', call.args[0])

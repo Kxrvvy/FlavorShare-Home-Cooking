@@ -229,6 +229,15 @@ BREVO_API_KEY = env('BREVO_API_KEY', default='')
 # "not configured" rather than papered over with a guess.
 BREVO_FROM_EMAIL = env('BREVO_FROM_EMAIL', default='')
 
+# TheMealDB
+# https://www.themealdb.com/api.php
+#
+# Used only by `manage.py import_themealdb` (recipes/management/commands) to
+# seed the catalogue. '1' is TheMealDB's own published test key - free, no
+# signup, rate-limited - so a fresh clone can run the import with no setup.
+# Swap in a registered key here if the free one starts throttling.
+THEMEALDB_API_KEY = env('THEMEALDB_API_KEY', default='1')
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
