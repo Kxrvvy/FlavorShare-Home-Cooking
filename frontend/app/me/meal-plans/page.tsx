@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { RequireSignIn } from "@/components/auth/RequireSignIn";
@@ -19,6 +20,7 @@ function dateRange(plan: MealPlanRow) {
 }
 
 function MealPlansList() {
+  const router = useRouter();
   const [plans, setPlans] = useState<MealPlanRow[] | null>(null);
   const [error, setError] = useState("");
 
@@ -55,11 +57,12 @@ function MealPlansList() {
     setCreateError("");
     try {
       const created = await createMealPlan({ name: trimmed });
-      setPlans((current) => (current ? [created, ...current] : [created]));
-      setName("");
+      // Straight to the new plan rather than back to this list - naming a
+      // plan is the first step of building it, not the whole task, and
+      // its dates/schedule live on the detail page, not here.
+      router.push(`/me/meal-plans/${created.meal_plan_id}`);
     } catch (err) {
       setCreateError(err instanceof ApiError ? err.message : "Could not create that plan.");
-    } finally {
       setCreating(false);
     }
   }
