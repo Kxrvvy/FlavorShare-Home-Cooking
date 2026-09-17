@@ -5,30 +5,48 @@ import { useState } from "react";
 import { CarouselArrows } from "@/components/ui/CarouselArrows";
 import { CategoryChip } from "@/components/ui/CategoryChip";
 import { RecipeCard } from "@/components/ui/RecipeCard";
-import { CATEGORIES } from "@/lib/dummy-recipes";
+import { CATEGORIES, tagName } from "@/lib/categories";
+import { getExplore } from "@/lib/home-recipes";
 import type { Recipe } from "@/lib/types";
 
 /* EXPLORE NEW RECIPES.
  *
- * The chips track which one is selected so the pressed state is real, but they
- * do not filter anything yet - that arrives with ?tag= against the live API,
- * which the backend already supports.
+ * `recipes` is only the initial, server-rendered "All" list - the first
+ * paint needs no request of its own. Every chip click after that calls
+ * getExplore() again from here, in the browser, with that chip's tag name;
+ * "All" clears the filter the same way. That is a genuine event handler, not
+ * an effect reacting to `category` changing - fetching from a useEffect
+ * keyed on state is exactly the shape Next 16's set-state-in-effect rule
+ * flags (see the note in RecipeDetail.tsx), and a click is the actual thing
+ * being reacted to here, not a derived value.
  *
  * Desktop lays the recipes out as a 3x2 grid. Mobile does not stack that grid:
  * the export shows a single card inside a cream panel with its own arrows, so
  * that is what the small breakpoint renders.
  */
 
-export function ExploreRecipes({ recipes }: { recipes: Recipe[] }) {
+export function ExploreRecipes({ recipes: initialRecipes }: { recipes: Recipe[] }) {
   const [category, setCategory] = useState<string>("All");
+  const [recipes, setRecipes] = useState<Recipe[]>(initialRecipes);
   const [index, setIndex] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
-  if (recipes.length === 0) return null;
+  async function selectCategory(next: string) {
+    if (next === category || loading) return;
 
-  function selectCategory(next: string) {
     setCategory(next);
-    // Whatever the carousel was showing belongs to the previous category.
     setIndex(0);
+    setLoading(true);
+    setError(false);
+    try {
+      const page = await getExplore(next === "All" ? undefined : tagName(next));
+      setRecipes(page.results);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -64,31 +82,46 @@ export function ExploreRecipes({ recipes }: { recipes: Recipe[] }) {
             key={label}
             label={label}
             active={label === category}
+            disabled={loading}
             onSelect={() => selectCategory(label)}
           />
         ))}
       </div>
 
-      {/* Mobile: a carousel in a panel, one card at a time. */}
-      <div className="mt-8 rounded-3xl bg-panel px-5 py-6 lg:hidden">
-        <CarouselArrows
-          label="recipe"
-          onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
-          onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
-          canGoPrevious={index > 0}
-          canGoNext={index < recipes.length - 1}
-        />
-        <div className="mt-5">
-          <RecipeCard recipe={recipes[index]} />
-        </div>
-      </div>
+      {loading ? (
+        <p className="mt-10 text-center text-sm text-muted">Loading recipes...</p>
+      ) : error ? (
+        <p className="mt-10 text-center text-sm text-red-600">
+          Could not load these recipes. Try another category.
+        </p>
+      ) : recipes.length === 0 ? (
+        <p className="mt-10 text-center text-sm text-muted">
+          Nothing tagged &ldquo;{category}&rdquo; yet.
+        </p>
+      ) : (
+        <>
+          {/* Mobile: a carousel in a panel, one card at a time. */}
+          <div className="mt-8 rounded-3xl bg-panel px-5 py-6 lg:hidden">
+            <CarouselArrows
+              label="recipe"
+              onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
+              onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
+              canGoPrevious={index > 0}
+              canGoNext={index < recipes.length - 1}
+            />
+            <div className="mt-5">
+              <RecipeCard recipe={recipes[index]} />
+            </div>
+          </div>
 
-      {/* Desktop: three across, two rows. */}
-      <div className="mt-10 hidden gap-6 lg:grid lg:grid-cols-3">
-        {recipes.map((recipe) => (
-          <RecipeCard key={recipe.recipe_id} recipe={recipe} />
-        ))}
-      </div>
+          {/* Desktop: three across, two rows. */}
+          <div className="mt-10 hidden gap-6 lg:grid lg:grid-cols-3">
+            {recipes.map((recipe) => (
+              <RecipeCard key={recipe.recipe_id} recipe={recipe} />
+            ))}
+          </div>
+        </>
+      )}
     </section>
   );
 }
