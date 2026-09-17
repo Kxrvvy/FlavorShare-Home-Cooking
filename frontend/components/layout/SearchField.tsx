@@ -1,29 +1,35 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 /* The recipe search box in the sidebar chrome.
  *
- * It searches your recipes - your own plus the ones you saved - because that is
- * the only collection the app can actually search today: /recipes is still a
- * placeholder, so sending a query there would look like the search did nothing.
- * The placeholder text says so rather than promising a search of everything.
+ * Context-aware rather than one fixed destination: everywhere except "My
+ * recipes" this searches the public Explore catalogue (/recipes?search=,
+ * real now - see app/recipes/page.tsx), because that is what a search box
+ * visible on the homepage and every recipe page ought to search. On "My
+ * recipes" it keeps searching your own collection (/me/recipes?q=) exactly
+ * as it always has - that page's own Tabs already own its query string, and
+ * a search launched from there is naturally about what you are looking at.
  *
- * The category dropdown that used to sit here is gone. Its options were diets -
- * vegan, breakfast, dessert - which come from tags, and the recipe list
- * endpoint does not return tags, so it could not have filtered anything. A
- * control that does nothing is worse than no control.
+ * The category dropdown that used to sit here is gone for good, independent
+ * of the above: its options were diets - vegan, breakfast, dessert - which
+ * belong to the Explore page's own tag chips now, not to global chrome.
  */
 export function SearchField({ onSubmitted }: { onSubmitted?: () => void }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [query, setQuery] = useState("");
+  const mine = pathname.startsWith("/me/recipes");
 
   function search(event: FormEvent) {
     event.preventDefault();
 
     const term = query.trim();
-    router.push(term ? `/me/recipes?q=${encodeURIComponent(term)}` : "/me/recipes");
+    const base = mine ? "/me/recipes" : "/recipes";
+    const param = mine ? "q" : "search";
+    router.push(term ? `${base}?${param}=${encodeURIComponent(term)}` : base);
     onSubmitted?.();
   }
 
@@ -38,8 +44,8 @@ export function SearchField({ onSubmitted }: { onSubmitted?: () => void }) {
         name="search"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search your recipes..."
-        aria-label="Search your recipes"
+        placeholder={mine ? "Search your recipes..." : "Search recipes..."}
+        aria-label={mine ? "Search your recipes" : "Search recipes"}
         className="min-w-0 flex-1 bg-transparent py-2 text-sm text-ink placeholder:text-muted focus:outline-none"
       />
 

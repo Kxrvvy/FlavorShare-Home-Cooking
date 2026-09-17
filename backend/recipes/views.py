@@ -317,6 +317,29 @@ class RecipeViewSet(viewsets.ModelViewSet):
             ).data
         )
 
+    @action(detail=False)
+    def cuisines(self, request):
+        """Distinct cuisine_type values among recipes this caller can see.
+
+        cuisine_type is free text - RecipeFilterSet's own iexact filter says
+        so - so there is no fixed list to hand a cuisine dropdown the way
+        lib/categories.ts hardcodes the six tags. This is that list, built
+        from whatever authors have actually typed rather than invented.
+
+        distinct() on a flat values_list is the ordinary, safe use of it -
+        unlike the tag/ingredient filters two methods up, there is no join
+        here to fan out rows, so nothing needs the GROUP BY this viewset's
+        aggregate annotations otherwise provide.
+        """
+        values = (
+            visible_recipes(request.user)
+            .exclude(cuisine_type__isnull=True)
+            .exclude(cuisine_type__exact='')
+            .values_list('cuisine_type', flat=True)
+            .distinct()
+        )
+        return Response(sorted(set(values), key=str.lower))
+
 
 class RecipeChildViewSet(viewsets.ModelViewSet):
     """Shared behaviour for rows that belong to a recipe.

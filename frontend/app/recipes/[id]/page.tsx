@@ -18,6 +18,9 @@ export const metadata: Metadata = {
  * No sign-in gate: guests can read a published recipe, same as the homepage.
  * RecipeDetail hides the write actions itself for anyone who is not signed
  * in as a registered user.
+ *
+ * hideSearch: searching for another recipe makes little sense while reading
+ * one, and RecipeDetail's own "Back to recipes" link is the way out instead.
  */
 export default async function RecipeDetailPage({
   params,
@@ -28,8 +31,10 @@ export default async function RecipeDetailPage({
   if (!Number.isInteger(recipeId) || recipeId <= 0) notFound();
 
   return (
-    <AppShell>
-      <RecipeDetail recipeId={recipeId} />
+    <AppShell hideSearch>
+      <div className="mx-auto w-full max-w-[1100px] px-5 py-10 lg:px-6 lg:py-14">
+        <RecipeDetail recipeId={recipeId} />
+      </div>
     </AppShell>
   );
 }

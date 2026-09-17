@@ -142,6 +142,11 @@ type ShellProps = {
    * the job, and a footer of marketing links under a half-written recipe is
    * noise. The nav stays, so there is still a way out. */
   variant?: "app" | "editor";
+  /* Drops just the search box, keeping the footer and the rest of "app" -
+   * unlike variant="editor", which drops both. For a page where searching
+   * makes no sense (reading one recipe) but is still a page to browse from,
+   * not a workspace. */
+  hideSearch?: boolean;
 };
 
 /* The views of My recipes, shown beneath it rather than as a group of their
@@ -224,7 +229,12 @@ function CollectionLinks({
   );
 }
 
-export function AppShell({ children, action, variant = "app" }: ShellProps) {
+export function AppShell({
+  children,
+  action,
+  variant = "app",
+  hideSearch = false,
+}: ShellProps) {
   const editor = variant === "editor";
   /* A drawer left open behind a navigation is one you have to dismiss twice, so
    * every link inside it closes the drawer itself through onNavigate. Watching
@@ -373,7 +383,7 @@ export function AppShell({ children, action, variant = "app" }: ShellProps) {
             id="app-drawer"
             className="border-b border-rule bg-canvas px-5 pb-6 pt-4 shadow-lg lg:hidden"
           >
-            {!editor && <SearchField onSubmitted={() => setOpen(false)} />}
+            {!editor && !hideSearch && <SearchField onSubmitted={() => setOpen(false)} />}
 
             <div className="mt-4">
               <NavLinks onNavigate={() => setOpen(false)} />
@@ -398,9 +408,11 @@ export function AppShell({ children, action, variant = "app" }: ShellProps) {
               action ? "flex py-5" : "hidden"
             }`}
           >
-            <div className="hidden min-w-0 max-w-[470px] flex-1 lg:block">
-              <SearchField />
-            </div>
+            {!hideSearch && (
+              <div className="hidden min-w-0 max-w-[470px] flex-1 lg:block">
+                <SearchField />
+              </div>
+            )}
 
             {action && <div className="ml-auto">{action}</div>}
           </div>

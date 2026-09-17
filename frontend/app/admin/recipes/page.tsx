@@ -10,7 +10,8 @@ import {
   updateRecipe,
   type RecipeRow,
 } from "@/features/recipes/api";
-import { FIELD, PageButtons } from "@/features/dashboard/components/shared";
+import { PageButtons } from "@/components/ui/PageButtons";
+import { FIELD } from "@/features/dashboard/components/shared";
 
 export default function AdminRecipesPage() {
   const [search, setSearch] = useState("");
