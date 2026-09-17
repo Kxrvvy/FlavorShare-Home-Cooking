@@ -259,29 +259,38 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
 
   return (
     <div className="pb-16">
-      <RecipePreview
-        title={recipe.title}
-        description={recipe.description ?? ""}
-        servings={recipe.servings != null ? String(recipe.servings) : ""}
-        prepTime={recipe.prep_time != null ? `${recipe.prep_time} min` : ""}
-        cookTime={recipe.cook_time != null ? `${recipe.cook_time} min` : ""}
-        cuisine={recipe.cuisine_type ?? ""}
-        difficulty={recipe.difficulty ?? ""}
-        cover={cover}
-        tags={tags}
-        ingredients={ingredients.map((row) => ({
-          key: String(row.recipe_ingredient_id),
-          quantity: row.quantity ?? "",
-          unit: row.unit ?? "",
-          name: row.ingredient.name,
-        }))}
-        steps={steps.map((row) => ({
-          key: String(row.step_id),
-          text: row.instruction,
-          preview: row.images[0]?.url ?? null,
-        }))}
-        author={recipe.user?.username}
-      />
+      <Link
+        href="/recipes"
+        className="font-display text-sm font-semibold text-maroon hover:underline"
+      >
+        ← Back to recipes
+      </Link>
+
+      <div className="mt-6">
+        <RecipePreview
+          title={recipe.title}
+          description={recipe.description ?? ""}
+          servings={recipe.servings != null ? String(recipe.servings) : ""}
+          prepTime={recipe.prep_time != null ? `${recipe.prep_time} min` : ""}
+          cookTime={recipe.cook_time != null ? `${recipe.cook_time} min` : ""}
+          cuisine={recipe.cuisine_type ?? ""}
+          difficulty={recipe.difficulty ?? ""}
+          cover={cover}
+          tags={tags}
+          ingredients={ingredients.map((row) => ({
+            key: String(row.recipe_ingredient_id),
+            quantity: row.quantity ?? "",
+            unit: row.unit ?? "",
+            name: row.ingredient.name,
+          }))}
+          steps={steps.map((row) => ({
+            key: String(row.step_id),
+            text: row.instruction,
+            preview: row.images[0]?.url ?? null,
+          }))}
+          author={recipe.user?.username}
+        />
+      </div>
 
       {/* -------------------------------------------------- rating & save */}
       <section className="mx-auto mt-4 flex max-w-[620px] flex-col items-center gap-3 border-t border-rule pt-8 text-center">

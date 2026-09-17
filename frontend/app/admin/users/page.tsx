@@ -9,7 +9,8 @@ import {
   updateUser,
   type AdminUserRow,
 } from "@/features/dashboard/api";
-import { FIELD, PageButtons } from "@/features/dashboard/components/shared";
+import { PageButtons } from "@/components/ui/PageButtons";
+import { FIELD } from "@/features/dashboard/components/shared";
 import { ApiError } from "@/features/recipes/api";
 import { useSession } from "@/lib/useSession";
 

@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { listAllComments } from "@/features/dashboard/api";
-import { PageButtons } from "@/features/dashboard/components/shared";
+import { PageButtons } from "@/components/ui/PageButtons";
 import { ApiError, deleteComment, type CommentRow } from "@/features/recipes/api";
 
 export default function AdminCommentsPage() {

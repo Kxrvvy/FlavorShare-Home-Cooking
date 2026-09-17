@@ -33,8 +33,8 @@ export function Hero({ recipes }: { recipes: Recipe[] }) {
       className="mx-auto w-full max-w-[1320px] px-5 lg:px-6"
     >
       <div className="relative overflow-hidden rounded-3xl">
-        <div className="relative aspect-[375/460] w-full sm:aspect-[1258/355]">
-          {current.cover_image && (
+        <div className="relative aspect-[375/460] w-full sm:aspect-[1258/355] bg-panel">
+          {current.cover_image ? (
             <Image
               src={current.cover_image}
               alt=""
@@ -43,6 +43,12 @@ export function Hero({ recipes }: { recipes: Recipe[] }) {
               sizes="(max-width: 1320px) 100vw, 1320px"
               className="object-cover"
             />
+          ) : (
+            // The most-viewed recipe can legitimately have no cover photo
+            // yet - the gradient below still needs something to sit on top
+            // of besides bare page background, the same reasoning
+            // RecipeCard's own fallback panel gives.
+            <div className="h-full w-full bg-gradient-to-br from-panel to-rule" />
           )}
           {/* Readability, not decoration: the headline sits on a photograph
            * whose brightness we do not control. */}

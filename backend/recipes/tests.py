@@ -1520,6 +1520,41 @@ class RecipeFilterTests(BrowseTestCase):
         )
 
 
+class CuisinesActionTests(BrowseTestCase):
+    """GET /api/recipes/cuisines/ - the Explore page's cuisine dropdown."""
+
+    def test_returns_the_distinct_cuisines_in_use(self):
+        response = self.client.get(f'{RECIPES_URL}cuisines/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Rice cake and Adobo are both Filipino - one entry, not two - and the
+        # draft (also Filipino) contributes nothing beyond what the two
+        # published rows already do.
+        self.assertEqual(
+            response.data,
+            ['Filipino', 'Fusion', 'Indian', 'Thai'],
+        )
+
+    def test_guests_may_call_it(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.get(f'{RECIPES_URL}cuisines/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_a_recipe_with_no_cuisine_contributes_nothing(self):
+        Recipe.objects.create(
+            user=self.author,
+            title='Mystery bowl',
+            status=Recipe.Status.PUBLISHED,
+        )
+
+        response = self.client.get(f'{RECIPES_URL}cuisines/')
+
+        self.assertNotIn('', response.data)
+        self.assertNotIn(None, response.data)
+
+
 class RecipeSearchTests(BrowseTestCase):
     def test_search_matches_the_title(self):
         titles, _ = self.browse('?search=adobo')
