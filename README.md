@@ -140,7 +140,9 @@ spam folder before assuming something is broken.
 still works. Run `python manage.py import_themealdb` (optionally with
 `--limit N` or `--category "Vegetarian"`) to pull public recipes in as
 ordinary published rows, owned by a service account so they show up credited
-rather than authorless.
+rather than authorless. Most of the time you want `seed_demo_data` instead
+(see step 8 below) — it runs this for you and adds the ratings/reviews and
+featured picks that make the homepage worth looking at.
 
 Generate your own `SECRET_KEY`:
 
@@ -210,7 +212,31 @@ python backend/manage.py createsuperuser
 Superusers count as Admins in this project, so this account can reach
 admin-only endpoints and the Django admin panel at `/admin/`.
 
-### 8. Run it
+### 8. Seed demo data (optional, but the homepage needs it)
+
+The homepage's Trending and Featured Recipes sections, and the Explore
+page, all read real published recipes - a fresh database has none, so
+those sections show up empty or missing entirely (Featured Recipes hides
+itself outright when nothing is featured).
+
+```bash
+python backend/manage.py seed_demo_data
+```
+
+One command does both steps: it imports the TheMealDB catalogue for you
+if you have not already (same as running `import_themealdb` yourself - see
+the `THEMEALDB_API_KEY` note above), then adds five demo reviewer
+accounts, a spread of ratings and reviews across half the imported
+recipes, and features two of them. This is what makes the homepage and
+Explore page look like a used app instead of an empty one.
+
+Safe to run more than once - it will not create duplicate ratings or
+reviews. Keyed by TheMealDB's own recipe id rather than your database's
+local one, so everyone on the team gets the *same* recipes rated and
+featured, even though the local id each recipe ends up with will differ
+machine to machine.
+
+### 9. Run it
 
 ```bash
 python backend/manage.py runserver
