@@ -6,7 +6,8 @@ at the empty prefix and the rest sit beside it:
     /api/meal-plans/                    your plans
     /api/meal-plans/<id>/generate/      fill the schedule
     /api/meal-plans/entries/            slots      (?meal_plan=<id>, ?day=, ?meal_type=)
-    /api/meal-plans/nutrition/          macros per recipe, read-only
+    /api/meal-plans/nutrition/           macros per recipe, read-only (?recipe=<id>)
+    /api/meal-plans/nutrition/fetch/     POST {"recipe": <id>} - fetch/cache one recipe's macros
 """
 
 from rest_framework.routers import SimpleRouter

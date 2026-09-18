@@ -29,9 +29,11 @@ script, another service - gets the NO ACTION behaviour.
 """
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from recipes.models import Recipe
+from social.models import Comment
 
 
 class Activity(models.Model):
@@ -43,6 +45,13 @@ class Activity(models.Model):
         COMMENTED = 'commented', 'Left a review'
         RATED = 'rated', 'Left a rating'
         SAVED = 'saved', 'Saved a recipe'
+        # A sixth value past the ERD's original five - added once there was a
+        # concrete moderation action to name, not speculatively. Unpublishing
+        # your own recipe or deleting your own review is self-service and logs
+        # nothing, the same as editing a draft always has; this is only for
+        # someone else's content - see dashboard/signals.py's log_recipe and
+        # log_comment_removed for exactly where the line is drawn.
+        MODERATED = 'moderated', 'Took a moderation action'
 
     # activity_id INT AUTO_INCREMENT PRIMARY KEY
     activity_id = models.AutoField(primary_key=True)
@@ -81,10 +90,12 @@ class Activity(models.Model):
 
     # action_type VARCHAR(50)  ->  choices, and NOT NULL
     #
-    # A deviation on both counts. The ERD enumerates the five actions, so
+    # A deviation on both counts. The ERD enumerates five actions; MODERATED is
+    # a sixth added past it, once there was something concrete for it to name.
     # TextChoices states them where a bare VARCHAR would leave them to be
     # guessed - the same treatment Recipe.status and MealPlanEntry.meal_type
-    # get. max_length 9 is "commented", the longest of the five.
+    # get. max_length 9 fits "commented" and "moderated" alike - both 9 - so
+    # the column did not need to grow for the new value.
     #
     # NOT NULL although the SQL allows null: an entry that does not say what
     # happened is not worth storing.
@@ -141,3 +152,115 @@ class Activity(models.Model):
             action_type=action_type,
             description=description,
         )
+
+
+class Report(models.Model):
+    """Not in the original 15-table ERD - added to close a named gap.
+
+    Feature 8 asks the Admin Dashboard for a "pending moderation" count, but
+    nothing recorded that a recipe or a review had *been* reported, so there
+    was no queue to count - see the note this replaces in serializers.py and
+    views.py. A recipe or a comment, never both: exactly one of `recipe` and
+    `comment` must be set, the same either/or `Activity.recipe` deliberately
+    is not - here the target is the whole point of the row, not an optional
+    extra. Enforced twice for the reason every other cross-field rule in this
+    project is: clean() is what a serializer or the Django admin's ModelForm
+    actually calls, and the CheckConstraint is what still holds if either is
+    bypassed - a fixture, a shell, a data migration.
+
+    Filed by a registered user (dashboard/views.py's ReportViewSet.create),
+    reviewed and closed by an admin. Resolving a report does not itself take
+    the moderation action - unpublishing a recipe or deleting a comment stays
+    the existing admin/recipes and admin/comments controls, which already log
+    or don't per their own rules. A report just tracks that someone flagged
+    something and whether an admin has looked at it.
+    """
+
+    class Reason(models.TextChoices):
+        SPAM = 'spam', 'Spam or advertising'
+        INAPPROPRIATE = 'inappropriate', 'Inappropriate content'
+        MISINFORMATION = 'misinformation', 'Misinformation'
+        OTHER = 'other', 'Other'
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        RESOLVED = 'resolved', 'Resolved'
+        DISMISSED = 'dismissed', 'Dismissed'
+
+    report_id = models.AutoField(primary_key=True)
+
+    # PROTECT, like every other user FK here: removing a reporter is a
+    # deactivation, not a reason to erase what they flagged.
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='filed_reports',
+    )
+
+    # Both nullable, both CASCADE: unlike Activity's log, a report has nothing
+    # left to say once its subject is gone, so it disappears with it rather
+    # than surviving as a record of a report about nothing.
+    recipe = models.ForeignKey(
+        Recipe,
+        on_delete=models.CASCADE,
+        related_name='reports',
+        blank=True,
+        null=True,
+    )
+    comment = models.ForeignKey(
+        Comment,
+        on_delete=models.CASCADE,
+        related_name='reports',
+        blank=True,
+        null=True,
+    )
+
+    reason = models.CharField(max_length=14, choices=Reason.choices)
+    details = models.TextField(blank=True)
+
+    status = models.CharField(
+        max_length=9,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+
+    # Who closed it and when - null while status is still pending. PROTECT
+    # for the same reason as `reporter`; a deactivated admin's past decisions
+    # should not need explaining away.
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='resolved_reports',
+        blank=True,
+        null=True,
+    )
+    resolved_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'Report'
+        ordering = ['-created_at', '-report_id']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    (models.Q(recipe__isnull=False) & models.Q(comment__isnull=True))
+                    | (models.Q(recipe__isnull=True) & models.Q(comment__isnull=False))
+                ),
+                name='report_targets_exactly_one_thing',
+            ),
+        ]
+        indexes = [
+            # The queue's default view: pending reports, newest first.
+            models.Index(fields=['status', '-created_at'], name='report_status_idx'),
+        ]
+
+    def __str__(self):
+        target = f'recipe #{self.recipe_id}' if self.recipe_id else f'comment #{self.comment_id}'
+        return f'{self.reporter.username} reported {target} ({self.reason})'
+
+    def clean(self):
+        if bool(self.recipe_id) == bool(self.comment_id):
+            raise ValidationError(
+                'Report exactly one recipe or one comment, not both or neither.'
+            )

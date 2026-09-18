@@ -1,7 +1,5 @@
 """Django admin registration for the dashboard app.
 
-One model, and the only one in this project registered without write access.
-
 Activity is a record of what happened. A hand-written entry would be a
 falsified audit trail, and an edited one worse - the feed and the monthly chart
 both read this table, so a doctored row quietly changes what the dashboard
@@ -12,11 +10,16 @@ without bound, so pruning it is a real administrative need, and Activity.user
 is PROTECT - if a spam account ever has to be removed rather than deactivated,
 its log entries have to go first or the delete is refused. Neither is possible
 if delete is closed too.
+
+Report is the opposite case: a fallback way to work the queue from /admin/
+while the custom page at /admin/reports is being built, so add stays closed
+(reports are filed through the API, never invented here) but status/resolved_*
+stay editable - resolving one is exactly the write this surface is for.
 """
 
 from django.contrib import admin
 
-from .models import Activity
+from .models import Activity, Report
 
 
 @admin.register(Activity)
@@ -65,3 +68,25 @@ class ActivityAdmin(admin.ModelAdmin):
         viewer rather than a locked door.
         """
         return False
+
+
+@admin.register(Report)
+class ReportAdmin(admin.ModelAdmin):
+    """Admin for dashboard.Report - a stopgap moderation queue."""
+
+    list_display = ('reporter', 'target', 'reason', 'status', 'created_at')
+    list_filter = ('status', 'reason')
+    search_fields = ('reporter__username', 'recipe__title', 'comment__content')
+    ordering = ('-created_at',)
+    list_select_related = ('reporter', 'recipe', 'comment', 'resolved_by')
+
+    # Model.clean()'s exactly-one-target rule and Report.reporter both need to
+    # be set at creation, which this surface has no form for - filing stays
+    # the API's job, same reasoning as ActivityAdmin.has_add_permission.
+    readonly_fields = ('reporter', 'recipe', 'comment', 'reason', 'details', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def target(self, obj):
+        return f'Recipe: {obj.recipe}' if obj.recipe_id else f'Comment on {obj.comment.recipe}'

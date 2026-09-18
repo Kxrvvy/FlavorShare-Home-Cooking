@@ -12,10 +12,10 @@ social and meal_plans, so there is no single model to hang a ModelSerializer
 on. They exist to name and type the payload rather than to validate input:
 nothing here ever calls is_valid().
 
-Deliberately absent from the summary: pending moderation. Feature 8 asks for it,
-but nothing in the ERD records that a recipe or review was reported, so the
-number cannot be computed - only invented. It stays an open item in CLAUDE.md
-instead of a plausible-looking zero.
+`pending_reports` in DashboardTotalsSerializer used to be the one number this
+docstring said could not be computed - "nothing in the ERD records that a
+recipe or review was reported, so the number cannot be computed - only
+invented." The Report model below is what changed that.
 """
 
 from rest_framework import serializers
@@ -26,7 +26,7 @@ from rest_framework import serializers
 # to someone else".
 from recipes.serializers import RecipeAuthorSerializer as PublicUserSerializer
 
-from .models import Activity
+from .models import Activity, Report
 
 
 class ActivitySerializer(serializers.ModelSerializer):
@@ -66,6 +66,7 @@ class DashboardTotalsSerializer(serializers.Serializer):
     tags = serializers.IntegerField()
     meal_plans = serializers.IntegerField()
     activities = serializers.IntegerField()
+    pending_reports = serializers.IntegerField()
 
 
 class MostRatedRecipeSerializer(serializers.Serializer):
@@ -109,3 +110,59 @@ class DashboardSummarySerializer(serializers.Serializer):
     most_rated = MostRatedRecipeSerializer(many=True)
     most_saved = MostSavedRecipeSerializer(many=True)
     monthly_activity = MonthlyActivitySerializer(many=True)
+
+
+class ReportSerializer(serializers.ModelSerializer):
+    """A filed report, for both sides of ReportViewSet.
+
+    `recipe` and `comment` stay plain writable primary keys - a registered
+    user files a report by naming one of the two - and the three `*_title`
+    / `*_content` fields alongside them are read-only context for the queue,
+    so an admin is not left with a bare id and a second fetch to find out
+    what was actually reported. `source='recipe.title'` etc. read straight
+    through the (possibly null) relation; DRF's default kicks in instead of
+    raising when the other side is the one actually set.
+    """
+
+    reporter = PublicUserSerializer(read_only=True)
+    resolved_by = PublicUserSerializer(read_only=True)
+
+    recipe_title = serializers.CharField(
+        source='recipe.title', read_only=True, default=None,
+    )
+    comment_content = serializers.CharField(
+        source='comment.content', read_only=True, default=None,
+    )
+    # So a report filed against a comment can still link to the recipe it
+    # sits under - the queue has nowhere else to get that id from.
+    comment_recipe = serializers.IntegerField(
+        source='comment.recipe_id', read_only=True, default=None,
+    )
+
+    class Meta:
+        model = Report
+        fields = [
+            'report_id',
+            'reporter',
+            'recipe',
+            'recipe_title',
+            'comment',
+            'comment_content',
+            'comment_recipe',
+            'reason',
+            'details',
+            'status',
+            'resolved_by',
+            'resolved_at',
+            'created_at',
+        ]
+        read_only_fields = ['status', 'resolved_by', 'resolved_at', 'created_at']
+
+    def validate(self, attrs):
+        recipe = attrs.get('recipe')
+        comment = attrs.get('comment')
+        if bool(recipe) == bool(comment):
+            raise serializers.ValidationError(
+                'Report exactly one recipe or one comment, not both or neither.'
+            )
+        return attrs

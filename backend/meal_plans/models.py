@@ -10,9 +10,11 @@ What is *not* optional is a MealPlanEntry's `day` and `meal_type` - see the
 note on the uniqueness constraint for why.
 
 NutritionInfo lives in this app rather than in recipes because CLAUDE.md
-assigns it here, alongside the meal planning it feeds. Nothing writes it yet:
-the nutrition provider is still unchosen, so the table ships empty and its
-API is read-only.
+assigns it here, alongside the meal planning it feeds. meal_plans/nutrition.py
+is what populates it, from Edamam's Recipe Analysis API, and
+NutritionInfoViewSet.fetch (meal_plans/views.py) is the one write path - a
+dedicated action rather than a create/update route, since a client supplies a
+recipe id, never macros of its own.
 """
 
 from django.conf import settings
@@ -205,11 +207,15 @@ class MealPlanEntry(models.Model):
 
 
 class NutritionInfo(models.Model):
-    """SQL: NutritionInfo - macros for one recipe, from an external API.
+    """SQL: NutritionInfo - macros for one recipe, from Edamam's Recipe
+    Analysis API (see meal_plans/nutrition.py for why that provider).
 
-    Nothing populates this yet. The provider is still undecided, so the model
-    and its read-only endpoint exist to be filled in once that choice is made
-    rather than to be used now.
+    A row here means someone has actually viewed this recipe while signed in
+    - NutritionInfoViewSet.fetch populates it lazily, the first time it is
+    asked for, rather than eagerly for every recipe on creation. All four
+    macro fields null means the fetch was tried and failed (bad credentials,
+    Edamam unreachable, nothing parseable in the ingredient list) rather than
+    "never tried" - the two are told apart by whether the row exists at all.
     """
 
     # nutrition_info_id INT AUTO_INCREMENT PRIMARY KEY

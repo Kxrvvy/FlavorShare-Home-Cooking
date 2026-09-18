@@ -19,6 +19,7 @@ import { useSession } from "@/lib/useSession";
 
 const NAV = [
   { label: "Dashboard", href: "/admin/dashboard" },
+  { label: "Reports", href: "/admin/reports" },
   { label: "Users", href: "/admin/users" },
   { label: "Recipes", href: "/admin/recipes" },
   { label: "Comments", href: "/admin/comments" },

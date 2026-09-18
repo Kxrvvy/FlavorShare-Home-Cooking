@@ -4,8 +4,10 @@ Mounted under /api/dashboard/ by backend/urls.py:
 
     /api/dashboard/summary/      totals, leaderboards, monthly chart
     /api/dashboard/activities/   the recent-activity feed  (?action_type=, ?user=)
+    /api/dashboard/reports/      the moderation queue  (?status=, ?reason=)
 
-Both are admin-only.
+The first two are admin-only. reports/ opens POST to any registered user -
+see ReportViewSet.get_permissions - everything else on it stays admin-only.
 
 A path() alongside router.urls, the way accounts/urls.py mixes them: the summary
 is a single computed report over four apps, not a collection with detail routes,
@@ -24,6 +26,7 @@ from . import views
 # 'api-root', and every app's router would collide on that name.
 router = SimpleRouter()
 router.register(r'activities', views.ActivityViewSet, basename='activity')
+router.register(r'reports', views.ReportViewSet, basename='report')
 
 urlpatterns = [
     path(

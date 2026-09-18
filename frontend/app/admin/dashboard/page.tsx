@@ -1,11 +1,12 @@
 "use client";
 
-/* "What is currently happening on the platform?" - stats, the two
- * leaderboards, the monthly chart, then recent activity and a few shortcuts
- * to the sections an admin reaches for most. Reports would lead this page
- * under the spec's own information hierarchy ("things requiring attention"
- * first) - deferred along with the rest of the Reports feature, so this
- * starts from platform totals instead.
+/* "What is currently happening on the platform?" - and, now that Reports
+ * exists, "does anything need me?" first. The spec's own information
+ * hierarchy puts things requiring attention ahead of platform totals, so a
+ * nonzero pending-reports count gets a banner above everything else here;
+ * at zero it says so and gets out of the way. Then the stats, the two
+ * leaderboards, the monthly chart, recent activity, and a few shortcuts to
+ * the sections an admin reaches for most.
  */
 
 import Link from "next/link";
@@ -51,6 +52,7 @@ function lastTwelveMonths(points: MonthlyActivityPoint[]): MonthlyActivityPoint[
 }
 
 const QUICK_ACTIONS = [
+  { label: "Review reports", href: "/admin/reports" },
   { label: "Manage users", href: "/admin/users" },
   { label: "Manage recipes", href: "/admin/recipes" },
   { label: "Moderate comments", href: "/admin/comments" },
@@ -100,6 +102,23 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="flex flex-col gap-10">
+      {totals.pending_reports > 0 ? (
+        <Link
+          href="/admin/reports"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-maroon bg-maroon/10 px-5 py-4 transition-colors hover:bg-maroon/15"
+        >
+          <p className="font-display text-sm font-semibold text-maroon">
+            {totals.pending_reports} report{totals.pending_reports === 1 ? "" : "s"} waiting on
+            you
+          </p>
+          <span className="font-display text-xs font-semibold text-maroon">Review now</span>
+        </Link>
+      ) : (
+        <div className="rounded-2xl border border-rule bg-card px-5 py-4">
+          <p className="text-sm text-muted">No pending reports right now.</p>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2">
         {QUICK_ACTIONS.map((action) => (
           <Link
