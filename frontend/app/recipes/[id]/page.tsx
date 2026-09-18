@@ -8,12 +8,11 @@ export const metadata: Metadata = {
   title: "Recipe | FlavorShare",
 };
 
-/* The minimal version of this page: what the builder already collects,
- * rendered through the same RecipePreview it uses, plus Ratings & Reviews and
- * a Save button. Not the full redesign - that one needs Step.title,
- * Recipe.equipment, Recipe.body, User.bio and User.avatar_url, none of which
- * exist yet - but Ratings & Reviews had nowhere to attach to without this
- * much existing first.
+/* What the builder collects, rendered through the same RecipePreview it uses,
+ * plus Ratings & Reviews, Nutrition, and a Save button. Still not the full
+ * design - a real author card needs User.bio and User.avatar_url, which do
+ * not exist yet - but everything else the original stub deferred
+ * (Step.title, Recipe.equipment, Recipe.body) is real now.
  *
  * No sign-in gate: guests can read a published recipe, same as the homepage.
  * RecipeDetail hides the write actions itself for anyone who is not signed

@@ -172,7 +172,8 @@ export async function addIngredient(
 export async function addStep(
   recipeId: number,
   instruction: string,
-  stepNumber: number
+  stepNumber: number,
+  title?: string
 ) {
   // Returns the created step: a photo for this instruction needs its step_id,
   // and the response is the only place that id exists.
@@ -182,6 +183,7 @@ export async function addStep(
       recipe: recipeId,
       instruction,
       step_number: stepNumber,
+      ...(title ? { title } : {}),
     }),
   });
 }
@@ -256,6 +258,13 @@ export interface RecipeRow {
   /* RecipeDetailSerializer nests these; the list serializer does not. Present
    * on getRecipe, which is the only caller that needs them. */
   images?: ImageRow[];
+  /* Detail-only, same reasoning as `images` - a card has no use for a
+   * recipe's full long-form content. `body` is plain text, one paragraph per
+   * blank line; `equipment` is plain text, one item per line - see the
+   * comments on both fields in recipes/models.py for why neither is a
+   * richer shape. */
+  body?: string | null;
+  equipment?: string | null;
   /* Both serializers return these, but only the detail page reads them, so
    * they stayed untyped until now - same reasoning as `images` above. `tags`
    * is names, not labels; lib/categories.ts's tagLabel() converts. */
@@ -270,6 +279,9 @@ export interface RecipeRow {
 export interface StepRow {
   step_id: number;
   step_number: number;
+  /** Optional - the coral heading above a step in the reference design.
+   * A step written before this field existed simply has none. */
+  title: string | null;
   instruction: string;
   images: { image_id: number; url: string; type: string }[];
 }
@@ -359,7 +371,7 @@ export async function listSteps(recipeId: number) {
 
 export async function updateStep(
   stepId: number,
-  patch: { instruction?: string; step_number?: number }
+  patch: { instruction?: string; step_number?: number; title?: string | null }
 ) {
   return request<StepRow>(`/recipes/steps/${stepId}/`, {
     method: "PATCH",

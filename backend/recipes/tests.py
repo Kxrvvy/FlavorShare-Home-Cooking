@@ -34,6 +34,7 @@ from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 from .serializers import (
     ImageSerializer,
     IngredientSerializer,
+    RecipeDetailSerializer,
     RecipeIngredientSerializer,
     RecipeListSerializer,
     RecipeWriteSerializer,
@@ -1270,6 +1271,82 @@ class RecipeWriteSerializerTests(RecipeTestCase):
 
         serializer = self._publish(published)
         self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_body_and_equipment_round_trip(self):
+        serializer = RecipeWriteSerializer(
+            self.recipe,
+            data={
+                'body': "Let's go over the basics.\n\nDon't overcrowd the pan.",
+                'equipment': 'Roasting pan\nMeat thermometer',
+            },
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        saved = serializer.save()
+
+        self.assertIn('overcrowd', saved.body)
+        self.assertIn('Meat thermometer', saved.equipment)
+
+    def test_body_and_equipment_stay_optional(self):
+        serializer = RecipeWriteSerializer(data={'title': 'Lumpia'})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertIsNone(serializer.save(user=self.user).body)
+
+
+class StepTitleTests(RecipeTestCase):
+    """The one new field on Step - optional, and just along for the ride."""
+
+    def test_a_step_may_be_given_a_title(self):
+        serializer = StepSerializer(data={
+            'recipe': self.recipe.pk,
+            'title': 'Preheat and prepare',
+            'instruction': 'Preheat the oven to 375F.',
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        step = serializer.save()
+
+        self.assertEqual(step.title, 'Preheat and prepare')
+
+    def test_a_step_without_a_title_still_saves(self):
+        """Every step written before this field existed reads exactly this
+        way - a title is an addition, never a requirement."""
+        serializer = StepSerializer(data={
+            'recipe': self.recipe.pk,
+            'instruction': 'Boil.',
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        step = serializer.save()
+
+        self.assertIsNone(step.title)
+
+
+class ContentFieldsVisibilityTests(RecipeTestCase):
+    """body/equipment are detail-only, the same treatment steps/images get -
+    a list of cards has no use for a recipe's full long-form content."""
+
+    def test_the_list_serializer_omits_them(self):
+        self.assertNotIn('body', RecipeListSerializer(self.recipe).data)
+        self.assertNotIn('equipment', RecipeListSerializer(self.recipe).data)
+
+    def test_the_detail_serializer_carries_them(self):
+        self.recipe.body = 'Some tips.'
+        self.recipe.equipment = 'A whisk'
+        self.recipe.save()
+
+        data = RecipeDetailSerializer(self.recipe).data
+        self.assertEqual(data['body'], 'Some tips.')
+        self.assertEqual(data['equipment'], 'A whisk')
+
+    def test_a_steps_title_reaches_the_detail_payload(self):
+        Step.objects.create(
+            recipe=self.recipe,
+            step_number=1,
+            title='Preheat and prepare',
+            instruction='Preheat the oven.',
+        )
+
+        data = RecipeDetailSerializer(self.recipe).data
+        self.assertEqual(data['steps'][0]['title'], 'Preheat and prepare')
 
 
 class BrowseTestCase(APITestCase):

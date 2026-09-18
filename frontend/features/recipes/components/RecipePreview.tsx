@@ -4,13 +4,14 @@
  *
  * Modelled on the recipe page in the Figma export - the coral RECIPE pill, the
  * centred title over a wide photo, the cream ingredients panel, INSTRUCTIONS in
- * numbered steps - so the preview is a rehearsal of the real page rather than a
- * second design nobody else will ever see.
+ * numbered steps with their own headings - so the preview is a rehearsal of
+ * the real page rather than a second design nobody else will ever see.
  *
- * It shows only what the builder actually holds. The design also has equipment,
- * nutrition, long-form prose and per-step headings, and none of those exist as
- * fields yet; inventing them here would preview a recipe the author cannot
- * write. Those sections are simply absent until the columns are.
+ * It shows only what the builder actually holds. The design also has
+ * nutrition and a photo+bio author card, and neither exists as a field yet
+ * (nutrition is fetched from Edamam only for a saved, viewed recipe - see
+ * `extraSidebar` below - and there is no User.bio/avatar_url); inventing
+ * either here would preview something the author cannot actually produce.
  *
  * Fed from the builder's live state rather than the server, so it reflects what
  * has been typed this second, including a row that has not saved yet.
@@ -25,6 +26,10 @@ type PreviewIngredient = {
 
 type PreviewStep = {
   key: string;
+  /** The coral heading over a step's instructions. Falls back to "Step N"
+   * when a step was never given one, the same as every step written before
+   * this field existed. */
+  title?: string;
   text: string;
   preview: string | null;
 };
@@ -32,6 +37,12 @@ type PreviewStep = {
 type Props = {
   title: string;
   description: string;
+  /** Long-form content below the hero photo - a headnote, tips, whatever a
+   * couple of sentences in `description` cannot hold. Plain text: a blank
+   * line between paragraphs is the only structure it carries. */
+  body?: string;
+  /** One tool per line, shown in its own sidebar card next to Ingredients. */
+  equipment?: string;
   servings: string;
   prepTime: string;
   cookTime: string;
@@ -42,6 +53,10 @@ type Props = {
   ingredients: PreviewIngredient[];
   steps: PreviewStep[];
   author?: string;
+  /** A slot in the same sidebar as Ingredients/Equipment, after both -
+   * RecipeDetail.tsx uses it for the Nutrition panel, which only exists for
+   * a real, saved recipe and so has no place in a draft's live preview. */
+  extraSidebar?: React.ReactNode;
 };
 
 function Meta({ icon, children }: { icon: string; children: React.ReactNode }) {
@@ -68,9 +83,27 @@ const CLOCK = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4.5V12l3 2";
 const KNIFE = "M4 4l9 9m-3 3l-4 4-2-2 4-4m6-3l4-4V3l-6 6";
 const PLATE = "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm0 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z";
 
+/** Paragraphs, split on a blank line - the only structure plain text carries. */
+function paragraphsOf(text: string): string[] {
+  return text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+/** List items, one per line. */
+function linesOf(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 export function RecipePreview({
   title,
   description,
+  body = "",
+  equipment = "",
   servings,
   prepTime,
   cookTime,
@@ -81,9 +114,12 @@ export function RecipePreview({
   ingredients,
   steps,
   author,
+  extraSidebar,
 }: Props) {
   const written = ingredients.filter((row) => row.name.trim());
   const instructions = steps.filter((row) => row.text.trim());
+  const paragraphs = paragraphsOf(body);
+  const equipmentItems = linesOf(equipment);
 
   return (
     <article className="pb-16">
@@ -140,43 +176,20 @@ export function RecipePreview({
         </div>
       </div>
 
+      {/* The intro: long-form prose beside the cream sidebar, the layout the
+        * reference design uses above its Instructions section rather than
+        * beside it. An empty `paragraphs` renders no prose but still leaves
+        * the sidebar its usual column - Ingredients always has something to
+        * say, even when it is "Nothing listed yet." */}
       <div className="mt-10 grid gap-10 lg:grid-cols-[1fr_19rem]">
-        <section className="min-w-0 lg:order-1">
-          <h2 className="font-display text-2xl font-bold uppercase tracking-tight text-ink">
-            Instructions
-          </h2>
+        <div className="min-w-0 lg:order-1 flex flex-col gap-4 text-sm leading-relaxed text-slate">
+          {paragraphs.map((paragraph, index) => (
+            <p key={index}>{paragraph}</p>
+          ))}
+        </div>
 
-          {instructions.length === 0 ? (
-            <p className="mt-4 text-sm text-muted">
-              Steps you write will appear here, in order.
-            </p>
-          ) : (
-            <ol className="mt-6 flex flex-col gap-8">
-              {instructions.map((step, index) => (
-                <li key={step.key}>
-                  <p className="font-display text-xs font-semibold uppercase tracking-widest text-ember">
-                    Step {index + 1}
-                  </p>
-                  <p className="mt-2 text-sm leading-relaxed text-slate">{step.text.trim()}</p>
-
-                  {step.preview && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={step.preview}
-                      alt=""
-                      className="mt-4 aspect-[4/3] w-full max-w-sm rounded-2xl border border-rule object-cover"
-                    />
-                  )}
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-
-        {/* The cream panel from the design, sticky beside the steps so the list
-          * stays readable while you scroll the method. */}
-        <aside className="lg:order-2">
-          <div className="rounded-2xl bg-panel p-6 lg:sticky lg:top-6">
+        <aside className="flex flex-col gap-4 lg:order-2">
+          <div className="rounded-2xl bg-panel p-6">
             <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
               Ingredients
             </h2>
@@ -203,8 +216,58 @@ export function RecipePreview({
               </p>
             )}
           </div>
+
+          {equipmentItems.length > 0 && (
+            <div className="rounded-2xl bg-panel p-6">
+              <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
+                Equipment needed
+              </h2>
+              <ul className="mt-4 flex flex-col gap-2.5">
+                {equipmentItems.map((item, index) => (
+                  <li key={index} className="flex gap-2 text-sm text-ink">
+                    <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-maroon" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {extraSidebar}
         </aside>
       </div>
+
+      <section className="mt-12">
+        <h2 className="font-display text-2xl font-bold uppercase tracking-tight text-ink">
+          Instructions
+        </h2>
+
+        {instructions.length === 0 ? (
+          <p className="mt-4 text-sm text-muted">
+            Steps you write will appear here, in order.
+          </p>
+        ) : (
+          <ol className="mt-6 flex flex-col gap-8">
+            {instructions.map((step, index) => (
+              <li key={step.key}>
+                <p className="font-display text-xs font-semibold uppercase tracking-widest text-ember">
+                  {step.title?.trim() || `Step ${index + 1}`}
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-slate">{step.text.trim()}</p>
+
+                {step.preview && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={step.preview}
+                    alt=""
+                    className="mt-4 aspect-[4/3] w-full max-w-sm rounded-2xl border border-rule object-cover"
+                  />
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
 
       {author && (
         <footer className="mt-12 flex items-center gap-3 border-t border-rule pt-6">

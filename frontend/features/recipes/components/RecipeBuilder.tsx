@@ -76,6 +76,9 @@ interface StepDraft {
    * step numbered by position walks straight into a surviving row. Delete step
    * 2 of 3 and the next one added is position 3, which the server already has. */
   number: number | null;
+  /** The coral heading in the reference design - optional, so a step written
+   * without one still renders exactly as every step did before this existed. */
+  title: string;
   text: string;
   preview: string | null;
   imageUrl: string | null;
@@ -123,7 +126,7 @@ function emptyIngredient(): IngredientDraft {
 
 function emptyStep(): StepDraft {
   return {
-    key: makeKey(), stepId: null, number: null, text: "",
+    key: makeKey(), stepId: null, number: null, title: "", text: "",
     preview: null, imageUrl: null, imageId: null, status: IDLE,
   };
 }
@@ -158,6 +161,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [body, setBody] = useState("");
+  const [equipment, setEquipment] = useState("");
   const [servings, setServings] = useState("");
   const [cookTime, setCookTime] = useState("");
   const [prepTime, setPrepTime] = useState("");
@@ -245,6 +250,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
         setTitle(recipe.title);
         setDescription(recipe.description ?? "");
+        setBody(recipe.body ?? "");
+        setEquipment(recipe.equipment ?? "");
         setServings(recipe.servings === null ? "" : String(recipe.servings));
         setCookTime(minutesToText(recipe.cook_time));
         setPrepTime(minutesToText(recipe.prep_time));
@@ -255,6 +262,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         saved.current = {
           title: recipe.title,
           description: recipe.description ?? "",
+          body: recipe.body ?? "",
+          equipment: recipe.equipment ?? "",
           servings: recipe.servings === null ? "" : String(recipe.servings),
           cook_time: minutesToText(recipe.cook_time),
           prep_time: minutesToText(recipe.prep_time),
@@ -299,6 +308,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
                 key,
                 stepId: row.step_id,
                 number: row.step_number,
+                title: row.title ?? "",
                 text: row.instruction,
                 preview: row.images.find((i) => i.type === "step")?.url ?? null,
                 imageUrl: row.images.find((i) => i.type === "step")?.url ?? null,
@@ -407,6 +417,14 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
   const saveDescription = fieldSaver("description", description, () => ({
     description: description.trim(),
+  }));
+
+  const saveBody = fieldSaver("body", body, () => ({
+    body: body.trim() || null,
+  }));
+
+  const saveEquipment = fieldSaver("equipment", equipment, () => ({
+    equipment: equipment.trim() || null,
   }));
 
   const saveServings = fieldSaver("servings", servings, () => {
@@ -550,6 +568,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       const text = row.text.trim();
       if (!text) return;
 
+      const title = row.title.trim();
+
       patchStep(row.key, { status: { state: "saving" } });
 
       try {
@@ -560,7 +580,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
            * take different numbers. Deriving it from state gave both the same
            * one, because neither had a number until its response landed. */
           const number = nextNumber.current++;
-          const created = await addStep(recipe, text, number);
+          const created = await addStep(recipe, text, number, title || undefined);
           ids.current[row.key] = created.step_id;
           patchStep(row.key, {
             stepId: created.step_id,
@@ -568,7 +588,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
             status: SAVED,
           });
         } else {
-          await updateStep(stepId, { instruction: text });
+          await updateStep(stepId, { instruction: text, title: title || null });
           patchStep(row.key, { status: SAVED });
         }
       } catch (error) {
@@ -626,7 +646,12 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         let stepId = ids.current[row.key] ?? null;
 
         if (stepId === null) {
-          const created = await addStep(recipe, row.text.trim() || "Step", nextNumber.current++);
+          const created = await addStep(
+            recipe,
+            row.text.trim() || "Step",
+            nextNumber.current++,
+            row.title.trim() || undefined
+          );
           stepId = created.step_id;
           ids.current[row.key] = stepId;
           patchStep(row.key, { stepId, number: created.step_number });
@@ -952,6 +977,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         <RecipePreview
           title={title}
           description={description}
+          body={body}
+          equipment={equipment}
           servings={servings}
           prepTime={prepTime}
           cookTime={cookTime}
@@ -1023,6 +1050,24 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         rows={3}
         aria-label="Description"
         className={`mt-6 w-full resize-none ${FIELD} disabled:opacity-50`}
+      />
+
+      {/* Long-form content beyond the short description above - a headnote,
+        * cooking tips, whatever would not fit in a couple of sentences.
+        * Plain text: a blank line between paragraphs is the only structure
+        * it carries. */}
+      <label className="mt-6 block text-xs font-semibold uppercase tracking-wide text-muted">
+        More about this recipe (optional)
+      </label>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        onBlur={saveBody}
+        disabled={locked}
+        placeholder="A headnote, cooking tips, serving suggestions - as much as you like"
+        rows={5}
+        aria-label="More about this recipe"
+        className={`mt-1.5 w-full resize-none ${FIELD} disabled:opacity-50`}
       />
 
       {/* One row for the facts. They used to be split across the two columns,
@@ -1242,6 +1287,25 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         >
           + Ingredient
         </button>
+
+        {/* Equipment sits with ingredients, not steps: both are "what you
+          * need before you start", read from the same sidebar panel in the
+          * reference design. One tool per line, the same free-typed shape as
+          * `body` above rather than its own set of rows - nothing here needs
+          * equipment to be searched or reused the way an ingredient is. */}
+        <label className="mt-8 block text-xs font-semibold uppercase tracking-wide text-muted">
+          Equipment needed (optional)
+        </label>
+        <textarea
+          value={equipment}
+          onChange={(e) => setEquipment(e.target.value)}
+          onBlur={saveEquipment}
+          disabled={locked}
+          placeholder={"One tool per line, e.g.\nRoasting pan\nMeat thermometer"}
+          rows={3}
+          aria-label="Equipment needed"
+          className={`mt-1.5 w-full resize-none ${FIELD} disabled:opacity-50`}
+        />
       </section>
 
       {/* --------------------------------------------------------------- steps */}
@@ -1311,16 +1375,27 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
                   </div>
                 </div>
 
-                <textarea
-                  value={row.text}
-                  onChange={(e) => patchStep(row.key, { text: e.target.value })}
-                  onBlur={() => saveStep(row)}
-                  disabled={locked}
-                  placeholder={`What happens in step ${index + 1}?`}
-                  rows={2}
-                  aria-label={`Step ${index + 1}`}
-                  className={`min-w-0 flex-1 resize-none ${FIELD} disabled:opacity-50`}
-                />
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <input
+                    value={row.title}
+                    onChange={(e) => patchStep(row.key, { title: e.target.value })}
+                    onBlur={() => saveStep(row)}
+                    disabled={locked}
+                    placeholder="Step heading (optional)"
+                    aria-label={`Heading for step ${index + 1}`}
+                    className={`${FIELD} disabled:opacity-50`}
+                  />
+                  <textarea
+                    value={row.text}
+                    onChange={(e) => patchStep(row.key, { text: e.target.value })}
+                    onBlur={() => saveStep(row)}
+                    disabled={locked}
+                    placeholder={`What happens in step ${index + 1}?`}
+                    rows={2}
+                    aria-label={`Step ${index + 1}`}
+                    className={`resize-none ${FIELD} disabled:opacity-50`}
+                  />
+                </div>
 
                 <button
                   type="button"
