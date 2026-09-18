@@ -6,14 +6,23 @@
  * box for browsing recipes: the normal-user experience this panel exists to
  * manage, not to be another instance of. An admin reaches this shell through
  * one link in AccountMenu and everything inside it is a different app in
- * function, so it gets a different frame - its own header (page title, who
- * is signed in, a way back to the site) and its own sidebar (the sections
- * from CLAUDE.md's Admin role, nothing else).
+ * function, so it gets a different frame - its own header and its own
+ * sidebar (the sections from CLAUDE.md's Admin role, nothing else).
+ *
+ * The sidebar's NAV is content sections only - Settings is not one, the same
+ * reason AppShell's own nav never lists it: it is about the signed-in admin's
+ * account, not a thing to moderate. It lives in AdminAccountMenu below, next
+ * to Back to site and Log out, all three reached the one way an account's own
+ * settings and sign-out belong together instead of scattered across a header
+ * chip, a sidebar link and a sidebar footer button - which is what this shell
+ * used to do. AdminAccountMenu mirrors AccountMenu's own click-to-open,
+ * click-outside-to-close popover on purpose: it is the same idea (an avatar
+ * that opens onto the account), not a second one invented for this panel.
  */
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useSession } from "@/lib/useSession";
 
@@ -64,14 +73,117 @@ function SidebarLinks({ onNavigate }: { onNavigate?: () => void }) {
 /** "Dashboard" for /admin/dashboard, "Recipes" for /admin/recipes/42 - the
  * header's title tracks whichever section owns the current path, not the
  * exact page, since a detail page has no title of its own until its data
- * has loaded. */
+ * has loaded. Settings is checked on its own, not added to NAV, since NAV is
+ * the sidebar's content-section list and Settings is not a content section -
+ * see the module docstring. */
 function currentTitle(pathname: string) {
+  if (isActive(pathname, "/admin/settings")) return "Settings";
   return NAV.find((item) => isActive(pathname, item.href))?.label ?? "Admin";
+}
+
+/** The one account control: an avatar that opens onto Settings, a way back
+ * to the site, and signing out - together, where AccountMenu's own users
+ * already expect an avatar to lead. Used in the header on every breakpoint,
+ * so unlike SidebarLinks there is no separate mobile-drawer copy to keep in
+ * sync with this one. */
+function AdminAccountMenu() {
+  const pathname = usePathname();
+  const { user, signOut } = useSession();
+  const [open, setOpen] = useState(false);
+  const wrapper = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    function onPointerDown(event: PointerEvent) {
+      if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
+
+  if (!user) return null;
+
+  return (
+    <div ref={wrapper} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls="admin-account-menu"
+        aria-label={`Account: ${user.username}`}
+        className="flex items-center gap-2.5 rounded-full py-1 pl-2 pr-1 transition-colors hover:bg-panel/60"
+      >
+        <span className="hidden text-right sm:block">
+          <span className="block font-display text-sm font-semibold text-ink">
+            @{user.username}
+          </span>
+          <span className="block text-xs uppercase tracking-wide text-muted">{user.role}</span>
+        </span>
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-maroon font-display text-sm font-semibold uppercase text-card">
+          {user.username.slice(0, 1)}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          id="admin-account-menu"
+          className="absolute right-0 top-full z-40 mt-2 w-60 rounded-2xl border border-rule bg-card p-2 shadow-lg"
+        >
+          <div className="px-3 py-2">
+            <p className="truncate font-display text-sm font-semibold text-ink">
+              @{user.username}
+            </p>
+            <p className="truncate text-xs text-muted">{user.email}</p>
+          </div>
+
+          <div className="my-1 border-t border-rule" />
+
+          <Link
+            href="/admin/settings"
+            onClick={() => setOpen(false)}
+            aria-current={isActive(pathname, "/admin/settings") ? "page" : undefined}
+            className={`block rounded-xl px-3 py-2 font-display text-sm transition-colors ${
+              isActive(pathname, "/admin/settings")
+                ? "bg-panel font-semibold text-maroon"
+                : "font-medium text-ink hover:bg-panel"
+            }`}
+          >
+            Settings
+          </Link>
+          <Link
+            href="/"
+            onClick={() => setOpen(false)}
+            className="block rounded-xl px-3 py-2 font-display text-sm font-medium text-slate transition-colors hover:bg-panel"
+          >
+            Back to site
+          </Link>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              signOut();
+            }}
+            className="block w-full rounded-xl px-3 py-2 text-left font-display text-sm font-medium text-maroon transition-colors hover:bg-panel"
+          >
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { user, signOut } = useSession();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -94,22 +206,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4">
           <SidebarLinks />
-        </div>
-
-        <div className="border-t border-rule p-4">
-          <Link
-            href="/"
-            className="block rounded-xl px-3 py-2.5 font-display text-sm font-medium text-slate transition-colors hover:bg-panel/60 hover:text-ink"
-          >
-            Back to site
-          </Link>
-          <button
-            type="button"
-            onClick={() => signOut()}
-            className="block w-full rounded-xl px-3 py-2.5 text-left font-display text-sm font-medium text-maroon transition-colors hover:bg-panel/60"
-          >
-            Logout
-          </button>
         </div>
       </aside>
 
@@ -153,19 +249,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             </h1>
           </div>
 
-          {user && (
-            <div className="flex shrink-0 items-center gap-2 text-right">
-              <div className="hidden sm:block">
-                <p className="font-display text-sm font-semibold text-ink">
-                  @{user.username}
-                </p>
-                <p className="text-xs uppercase tracking-wide text-muted">{user.role}</p>
-              </div>
-              <span className="grid h-9 w-9 place-items-center rounded-full bg-maroon font-display text-sm font-semibold uppercase text-card">
-                {user.username.slice(0, 1)}
-              </span>
-            </div>
-          )}
+          <AdminAccountMenu />
         </header>
 
         {open && (
@@ -174,22 +258,6 @@ export function AdminShell({ children }: { children: ReactNode }) {
             className="border-b border-rule bg-canvas px-5 pb-6 pt-2 shadow-lg lg:hidden"
           >
             <SidebarLinks onNavigate={() => setOpen(false)} />
-            <div className="mt-4 border-t border-rule pt-4">
-              <Link
-                href="/"
-                onClick={() => setOpen(false)}
-                className="block rounded-xl px-3 py-2.5 font-display text-sm font-medium text-slate hover:bg-panel/60"
-              >
-                Back to site
-              </Link>
-              <button
-                type="button"
-                onClick={() => signOut()}
-                className="block w-full rounded-xl px-3 py-2.5 text-left font-display text-sm font-medium text-maroon hover:bg-panel/60"
-              >
-                Logout
-              </button>
-            </div>
           </div>
         )}
 

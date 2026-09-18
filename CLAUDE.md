@@ -376,6 +376,43 @@ Each app follows the same internal structure:
 └── tests.py
 ```
 
+**Frontend — decided by precedent, not a separate planning pass.** The tree
+above predates the frontend entirely; this is the shape it actually grew
+into, built out incrementally alongside the backend rather than planned up
+front. Recorded here now that it is stable enough to call decided:
+
+```
+frontend/
+├── app/                          # Next.js App Router — one folder per route
+│   ├── admin/                    # the admin panel, its own layout+shell (see below)
+│   ├── recipes/                  # Explore (list) and a recipe's own page
+│   ├── me/                       # signed-in-only: meal plans, (my recipes lives here too)
+│   └── ...                       # login, signup, forgot/reset-password, static pages
+├── features/<domain>/            # one folder per backend app the frontend talks to
+│   ├── api.ts                    # fetch wrappers + response types for that domain
+│   └── components/               # components only that domain's pages use
+├── components/                   # shared, not owned by any one domain
+│   ├── layout/                   # AppShell, AdminShell, SearchField, nav
+│   ├── auth/                     # RequireSignIn, RequireAdmin
+│   ├── ui/                       # generic pieces used by more than one feature (PageButtons, ...)
+│   └── home/                     # homepage-only sections (Hero, FeaturedRecipes, ...)
+└── lib/                          # cross-cutting, no domain of its own
+    ├── api.ts                    # API_BASE_URL, shared error parsing
+    ├── auth.ts                   # the session store (see its own header comment)
+    ├── useSession.ts             # the hook every component reads it through
+    ├── types.ts                  # shapes mirroring the Django API, for pages with no feature/ of their own
+    ├── format.ts                 # display formatting (recipe meta line, etc.)
+    └── categories.ts             # the fixed six-tag chip list
+```
+
+`features/<domain>/api.ts` is the one place each domain's fetch calls and
+response types live - `features/recipes/api.ts` also exports the shared
+`request()`/`ApiError` helper every other domain's `api.ts` imports, rather
+than each reimplementing the 401-retry-once behaviour it carries. A page
+under `app/` is a thin composition of a domain's API calls and components;
+business logic beyond "call the API and render the result" stays out of
+`app/`.
+
 ### Team Split (5 people)
 1. **Person 1 — Database Setup + Authentication** *(build first — others depend on this)*
    MySQL/Django connection, `User` model, signup/login/logout, password
@@ -414,6 +451,18 @@ Each app follows the same internal structure:
 - Hosting: Vercel (frontend) + Render (backend)
 - Full ERD (15 tables) — built and reviewed
 - 5-app Django structure — built and reviewed
+- Frontend folder/page structure — grown by precedent rather than planned
+  up front; recorded as decided under **Project Folder Structure** above
+- **Admin Settings page** (`/admin/settings`) — scoped to the signed-in
+  admin's own account (profile fields, password) rather than site-wide
+  configuration, since no site-wide setting exists in this project's models
+  to back one. Both endpoints it uses (`/api/accounts/me/`,
+  `/api/accounts/password/`) already existed and were already tested; this
+  is the first page in the whole project to surface either one. A password
+  change signs the admin out everywhere, including the current session -
+  `PasswordChangeView` blacklists every outstanding refresh token, and the
+  page calls `signOut()` right after a successful change rather than trying
+  to stay signed in past that.
 - User roles (3) — finalized
 - Proposed features (10) — finalized
 - **Pending moderation metric, and moderation's Activity-log gap** — both
@@ -429,14 +478,15 @@ Each app follows the same internal structure:
   `dashboard/models.py`, `dashboard/signals.py` and `dashboard/views.py`.
 
 **Not yet decided / not yet built:**
-- Actual `CREATE TABLE` DB script (in progress by a teammate) — still just a
+- **`backend/flavorshare.sql`'s `CREATE TABLE` script — a teammate's own
+  in-progress file, not a task waiting on this assistant.** It remains a
   reference alongside Django's migrations, not what the live database runs
-  off of; `backend/flavorshare.sql` now carries its own header note explaining
-  why its `ON DELETE` clauses will not match the live schema even where the
-  intended behaviour agrees (Django's generated DDL is always `NO ACTION`
-  regardless of a model's `on_delete`), and flagging the one place they
-  disagree on more than DDL mechanics - every `user_id` FK here is CASCADE,
-  where nearly every one in the models is PROTECT, because removing a user is
-  a deactivation, not a delete. See the note in `dashboard/models.py` for the
-  DDL-mechanics half in more depth.
-- Frontend folder/page structure (not yet discussed)
+  off of. It now carries its own header note explaining why its `ON DELETE`
+  clauses will not match the live schema even where the intended behaviour
+  agrees (Django's generated DDL is always `NO ACTION` regardless of a
+  model's `on_delete`), and flagging the one place they disagree on more
+  than DDL mechanics - every `user_id` FK here is CASCADE, where nearly
+  every one in the models is PROTECT, because removing a user is a
+  deactivation, not a delete. See the note in `dashboard/models.py` for the
+  DDL-mechanics half in more depth. Nothing further here is expected unless
+  the teammate asks for help finishing it.
