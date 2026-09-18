@@ -19,6 +19,7 @@ import {
   ApiError,
   createRating,
   deleteComment,
+  fetchNutrition,
   getMyRating,
   getRecipe,
   getSavedEntry,
@@ -32,12 +33,14 @@ import {
   updateRating,
   type CommentRow,
   type IngredientRow,
+  type NutritionInfoRow,
   type RatingRow,
   type RecipeRow,
   type SavedRow,
   type StepRow,
 } from "@/features/recipes/api";
 import { RecipePreview } from "@/features/recipes/components/RecipePreview";
+import { ReportButton } from "@/features/recipes/components/ReportButton";
 import { tagLabel } from "@/lib/categories";
 import { useSession } from "@/lib/useSession";
 
@@ -78,6 +81,27 @@ function Stars({
   );
 }
 
+/** A decimal string from NutritionInfoRow, rounded for display - "500.00"
+ * reads as a lab result; "500" reads as a fact. Null (never fetched, or
+ * fetched and Edamam had nothing usable) renders the same as a bad number:
+ * a dash, not a fabricated zero. */
+function macro(value: string | null): string {
+  const num = value == null ? NaN : Number(value);
+  return Number.isNaN(num) ? "-" : String(Math.round(num));
+}
+
+function NutritionStat({ label, value, unit }: { label: string; value: string | null; unit: string }) {
+  return (
+    <div className="rounded-xl border border-rule bg-panel/60 px-4 py-3 text-center">
+      <p className="font-display text-lg font-semibold text-ink">
+        {macro(value)}
+        {value != null && <span className="ml-0.5 text-xs font-normal text-muted">{unit}</span>}
+      </p>
+      <p className="mt-0.5 text-xs text-muted">{label}</p>
+    </div>
+  );
+}
+
 export function RecipeDetail({ recipeId }: { recipeId: number }) {
   const { user } = useSession();
   const canAct = !!user && user.role !== "guest";
@@ -98,6 +122,11 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
   const [commentText, setCommentText] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
   const [commentError, setCommentError] = useState("");
+
+  const [nutrition, setNutrition] = useState<NutritionInfoRow | null>(null);
+  const [nutritionState, setNutritionState] = useState<
+    "loading" | "ready" | "unavailable"
+  >("loading");
 
   useEffect(() => {
     let cancelled = false;
@@ -159,6 +188,32 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
       cancelled = true;
     };
   }, [canAct, user, recipeId]);
+
+  // Registered users only, matching the endpoint's own gate - a guest never
+  // sees this section at all (see the render below), so there is nothing to
+  // fetch for one. Populates and caches server-side on first call; every
+  // later view of this recipe answers from that cache instead of asking
+  // Edamam again.
+  useEffect(() => {
+    if (!canAct) return;
+
+    let cancelled = false;
+    (async () => {
+      if (!cancelled) setNutritionState("loading");
+      try {
+        const info = await fetchNutrition(recipeId);
+        if (!cancelled) {
+          setNutrition(info);
+          setNutritionState("ready");
+        }
+      } catch {
+        if (!cancelled) setNutritionState("unavailable");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canAct, recipeId]);
 
   useEffect(() => {
     (async () => {
@@ -341,7 +396,37 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
             {ratingError || saveError}
           </p>
         )}
+
+        {canAct && !isOwnRecipe && (
+          <ReportButton target={{ recipe: recipeId }} label="Report this recipe" />
+        )}
       </section>
+
+      {/* ----------------------------------------------------- nutrition */}
+      {canAct && (
+        <section className="mx-auto mt-10 max-w-[620px] border-t border-rule pt-8">
+          <h2 className="font-display text-xl font-semibold text-ink">Nutrition</h2>
+
+          {nutritionState === "loading" && (
+            <p className="mt-3 text-sm text-muted">Looking this up...</p>
+          )}
+
+          {nutritionState === "unavailable" && (
+            <p className="mt-3 text-sm text-muted">
+              Nutrition info isn&apos;t available for this recipe right now.
+            </p>
+          )}
+
+          {nutritionState === "ready" && (
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <NutritionStat label="Calories" value={nutrition?.calories ?? null} unit="kcal" />
+              <NutritionStat label="Protein" value={nutrition?.protein ?? null} unit="g" />
+              <NutritionStat label="Carbs" value={nutrition?.carbs ?? null} unit="g" />
+              <NutritionStat label="Fat" value={nutrition?.fat ?? null} unit="g" />
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ------------------------------------------------------- reviews */}
       <section className="mx-auto mt-12 max-w-[620px]">
@@ -378,18 +463,21 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
           <p className="mt-6 text-sm text-muted">No reviews yet.</p>
         ) : (
           <ul className="mt-6 flex flex-col gap-5">
-            {comments.map((comment) => (
-              <li key={comment.comment_id} className="border-b border-rule pb-5">
-                <div className="flex items-center justify-between">
-                  <p className="font-display text-sm font-semibold text-ink">
-                    @{comment.user.username}
-                  </p>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-muted">
-                      {new Date(comment.created_at).toLocaleDateString()}
-                    </span>
-                    {user &&
-                      (user.user_id === comment.user.user_id || user.role === "admin") && (
+            {comments.map((comment) => {
+              const isOwnerOrAdmin =
+                !!user && (user.user_id === comment.user.user_id || user.role === "admin");
+
+              return (
+                <li key={comment.comment_id} className="border-b border-rule pb-5">
+                  <div className="flex items-center justify-between">
+                    <p className="font-display text-sm font-semibold text-ink">
+                      @{comment.user.username}
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted">
+                        {new Date(comment.created_at).toLocaleDateString()}
+                      </span>
+                      {isOwnerOrAdmin && (
                         <button
                           type="button"
                           onClick={() => removeComment(comment.comment_id)}
@@ -398,11 +486,17 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
                           Delete
                         </button>
                       )}
+                    </div>
                   </div>
-                </div>
-                <p className="mt-2 text-sm leading-relaxed text-slate">{comment.content}</p>
-              </li>
-            ))}
+                  <p className="mt-2 text-sm leading-relaxed text-slate">{comment.content}</p>
+                  {canAct && !isOwnerOrAdmin && (
+                    <div className="mt-2">
+                      <ReportButton target={{ comment: comment.comment_id }} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

@@ -35,9 +35,9 @@ class NutritionInfoSerializer(serializers.ModelSerializer):
     """Macros for one recipe.
 
     Every field is read-only, including on the model's own endpoint: these
-    figures come from an external provider, not from a client. Once a provider
-    is chosen, whatever fetches them writes through the model rather than
-    through here.
+    figures come from Edamam, not from a client. meal_plans/nutrition.py and
+    NutritionInfoViewSet.fetch write through the model directly rather than
+    through this serializer's (nonexistent) create/update path.
     """
 
     class Meta:

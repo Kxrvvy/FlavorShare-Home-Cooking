@@ -28,7 +28,7 @@ setups, and without it the receivers would connect twice and log everything
 twice.
 """
 
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from recipes.models import Recipe
@@ -68,21 +68,56 @@ def remember_recipe_status(sender, instance, raw=False, **kwargs):
 
 @receiver(post_save, sender=Recipe, dispatch_uid='dashboard.log_recipe')
 def log_recipe(sender, instance, created, raw=False, **kwargs):
-    """Log a recipe becoming published, or a published recipe changing.
+    """Log a recipe becoming published, a published recipe changing, or one
+    being moderated back to draft.
 
-    Drafts produce nothing. A draft is private - visible_recipes() hides it
-    from everyone but its author and admins - so an activity feed of drafts
-    would be both noise and a list of things not meant to be read yet.
+    Drafts produce nothing on the way in. A draft is private - visible_recipes()
+    hides it from everyone but its author and admins - so an activity feed of
+    drafts would be both noise and a list of things not meant to be read yet.
 
-    Note the gap this leaves: unpublishing, which is this project's soft
-    moderation action, logs nothing. None of the ERD's five action types
-    describes it, and inventing a sixth is an ERD change rather than a
-    decision to make here. See the open item in CLAUDE.md.
+    Going the other way - published back to draft - used to log nothing at
+    all, unconditionally: none of the ERD's five action types described
+    unpublishing, and it was an open item in CLAUDE.md rather than a decision
+    made here. MODERATED is that decision, but only for half of this case.
+    recipes.views.RecipeViewSet._set_status stashes `_actor` before saving,
+    which is the only way this signal can tell "the author pulled their own
+    recipe back" - self-service, as unremarkable as editing a draft - from
+    "someone else did", which given the permission class on that endpoint
+    (IsOwnerOrReadOnly | IsAdmin) can only be an admin. No `_actor` at all
+    means the save did not come through that endpoint - a direct .save() from
+    the shell, a fixture, the Django admin - and logs nothing rather than
+    guessing at who or why.
     """
-    if raw or instance.status != Recipe.Status.PUBLISHED:
+    if raw:
         return
 
     was = getattr(instance, '_status_before_save', None)
+
+    if instance.status == Recipe.Status.DRAFT:
+        if was != Recipe.Status.PUBLISHED:
+            return
+
+        actor = getattr(instance, '_actor', None)
+        if actor is None or actor.pk == instance.user_id:
+            return
+
+        Activity.log(
+            user=actor,
+            action_type=Activity.ActionType.MODERATED,
+            description=(
+                f'{actor.username} unpublished "{instance.title}" '
+                f'by {instance.user.username}.'
+            ),
+            recipe=instance,
+        )
+        return
+
+    # Only DRAFT and PUBLISHED exist today, and DRAFT already returned above,
+    # so this is reachable only for PUBLISHED - kept as a real check rather
+    # than assumed, so a third status added later without updating this
+    # function logs nothing instead of being misread as an edit.
+    if instance.status != Recipe.Status.PUBLISHED:
+        return
 
     if created or was != Recipe.Status.PUBLISHED:
         Activity.log(
@@ -114,6 +149,37 @@ def log_comment(sender, instance, created, raw=False, **kwargs):
         action_type=Activity.ActionType.COMMENTED,
         description=(
             f'{instance.user.username} reviewed "{instance.recipe.title}".'
+        ),
+        recipe=instance.recipe,
+    )
+
+
+@receiver(post_delete, sender=Comment, dispatch_uid='dashboard.log_comment_removed')
+def log_comment_removed(sender, instance, **kwargs):
+    """Log an admin removing someone else's review - the moderation path
+    social.views.CommentViewSet's own docstring already names.
+
+    Deleting your own review is cleanup, not an event - the same reasoning
+    log_recipe uses for a self-unpublish. social.views.CommentViewSet.
+    perform_destroy stashes `_actor` before deleting, the only way this
+    signal can tell the two apart; no `_actor` means the row went through
+    some other path (the Django admin, a shell) and logs nothing rather than
+    guessing.
+
+    post_delete carries no `raw` kwarg - fixture teardown does not delete
+    rows one at a time - so there is nothing to guard against here the way
+    every post_save receiver above does.
+    """
+    actor = getattr(instance, '_actor', None)
+    if actor is None or actor.pk == instance.user_id:
+        return
+
+    Activity.log(
+        user=actor,
+        action_type=Activity.ActionType.MODERATED,
+        description=(
+            f'{actor.username} removed a review by {instance.user.username} '
+            f'on "{instance.recipe.title}".'
         ),
         recipe=instance.recipe,
     )

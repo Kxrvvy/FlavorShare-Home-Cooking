@@ -105,6 +105,8 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | `BREVO_API_KEY` | for signup & reset | `xkeysib-xxxxxxxx` | Sends verification and password-reset codes. Server-side only. |
 | `BREVO_FROM_EMAIL` | for signup & reset | `FlavorShare <you@gmail.com>` | The From address. Must be a real mailbox you control — see below. |
 | `THEMEALDB_API_KEY` | no | `1` | Used only by `python manage.py import_themealdb`, which seeds the catalogue from [TheMealDB](https://www.themealdb.com/api.php). Defaults to `1`, TheMealDB's own free/test key — no signup needed unless it starts throttling. |
+| `EDAMAM_APP_ID` | for nutrition info | *from your dashboard* | Recipe nutrition lookups via [Edamam's Recipe Analysis API](https://developer.edamam.com/edamam-nutrition-api). |
+| `EDAMAM_APP_KEY` | for nutrition info | *from your dashboard* | Paired with the app id above. Server-side only. |
 
 The three `CLOUDINARY_*` keys are needed only for image uploads. Leave them
 out and everything else runs; `POST /api/recipes/images/upload/` answers
@@ -144,6 +146,14 @@ rather than authorless. Most of the time you want `seed_demo_data` instead
 (see step 8 below) — it runs this for you and adds the ratings/reviews and
 featured picks that make the homepage worth looking at.
 
+The two `EDAMAM_*` keys work the same way as Brevo's: leave them out and
+everything else runs, but viewing a recipe's Nutrition section while signed
+in answers `503` saying they are missing. Unlike TheMealDB, Edamam has no
+published test key, so there's no default to fall back to. Get a free pair
+at <https://developer.edamam.com> — sign up, create an application under
+**Recipe Analysis**, and the dashboard shows both `app_id` and `app_key`. No
+card required.
+
 Generate your own `SECRET_KEY`:
 
 ```bash
@@ -164,6 +174,10 @@ CLOUDINARY_API_SECRET=your-api-secret
 # Needed to register a user at all - signup sends a verification code
 BREVO_API_KEY=your-brevo-key
 BREVO_FROM_EMAIL=FlavorShare <you@gmail.com>
+
+# Only needed to see a recipe's Nutrition section
+EDAMAM_APP_ID=your-edamam-app-id
+EDAMAM_APP_KEY=your-edamam-app-key
 ```
 
 The three optional keys have working defaults in `settings.py`; set them only

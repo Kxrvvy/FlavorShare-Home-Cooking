@@ -19,6 +19,7 @@ or need a real API key - a green run says nothing about whether BREVO_API_KEY
 works, the same caveat recipes/tests.py carries about Cloudinary.
 """
 
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -27,6 +28,7 @@ from brevo.core import ApiError
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AnonymousUser
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -920,6 +922,75 @@ class OneTimeCodeModelTests(TestCase):
         user.delete()
 
         self.assertFalse(OneTimeCode.objects.exists())
+
+
+class CleanupExpiredTokensCommandTests(TestCase):
+    """The depth-pass command CLAUDE.md names: neither table prunes itself,
+    so this is what a cron/scheduled task would actually run."""
+
+    def pending(self, **overrides):
+        fields = {
+            'username': 'newcomer',
+            'email': 'newcomer@example.com',
+            'password_hash': make_password(PASSWORD),
+        }
+        fields.update(overrides)
+        return PendingSignup.objects.create(**fields)
+
+    def expire(self, row):
+        type(row).objects.filter(pk=row.pk).update(
+            expires_at=timezone.now() - OTP_TTL,
+        )
+
+    def test_deletes_expired_pending_signups_and_keeps_active_ones(self):
+        stale = self.pending()
+        fresh = self.pending(username='fresher', email='fresher@example.com')
+        self.expire(stale)
+
+        call_command('cleanup_expired_tokens', stdout=StringIO())
+
+        self.assertFalse(PendingSignup.objects.filter(pk=stale.pk).exists())
+        self.assertTrue(PendingSignup.objects.filter(pk=fresh.pk).exists())
+
+    def test_deletes_expired_one_time_codes_and_keeps_active_ones(self):
+        stale_user = User.objects.create_user(
+            username='cook', email='cook@example.com', password=PASSWORD,
+        )
+        fresh_user = User.objects.create_user(
+            username='baker', email='baker@example.com', password=PASSWORD,
+        )
+        stale = OneTimeCode.objects.create(
+            user=stale_user, purpose=OneTimeCode.Purpose.PASSWORD_RESET,
+        )
+        fresh = OneTimeCode.objects.create(
+            user=fresh_user, purpose=OneTimeCode.Purpose.PASSWORD_RESET,
+        )
+        self.expire(stale)
+
+        call_command('cleanup_expired_tokens', stdout=StringIO())
+
+        self.assertFalse(OneTimeCode.objects.filter(pk=stale.pk).exists())
+        self.assertTrue(OneTimeCode.objects.filter(pk=fresh.pk).exists())
+
+    def test_dry_run_deletes_nothing(self):
+        stale = self.pending()
+        self.expire(stale)
+
+        out = StringIO()
+        call_command('cleanup_expired_tokens', '--dry-run', stdout=out)
+
+        self.assertTrue(PendingSignup.objects.filter(pk=stale.pk).exists())
+        self.assertIn('1 expired row', out.getvalue())
+
+    def test_reports_how_many_it_deleted(self):
+        stale = self.pending()
+        self.expire(stale)
+
+        out = StringIO()
+        call_command('cleanup_expired_tokens', stdout=out)
+
+        self.assertIn('PendingSignup: deleted 1 expired row', out.getvalue())
+        self.assertIn('OneTimeCode: deleted 0 expired row', out.getvalue())
 
 
 class CreateUserFromHashTests(TestCase):

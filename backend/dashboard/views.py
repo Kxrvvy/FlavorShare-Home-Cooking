@@ -14,22 +14,30 @@ forgetting it.
 These reads reach across four apps. The dependency only points one way -
 dashboard imports accounts, recipes, social and meal_plans, and none of them
 imports dashboard.
+
+ReportViewSet lives here too, alongside its own module docstring below - it
+is a third view over a table this app owns, not a fourth app's worth of
+material.
 """
 
 from django.contrib.auth import get_user_model
 from django.db.models import Avg, Count, DateField
 from django.db.models.functions import TruncMonth
-from rest_framework import viewsets
+from django.utils import timezone
+from rest_framework import mixins, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAdmin
+from accounts.permissions import IsAdmin, IsRegisteredUser
 from meal_plans.models import MealPlan
 from recipes.models import Recipe
+from recipes.views import visible_recipes
 from social.models import Comment, Rating, SavedRecipe, Tag
 
-from .models import Activity
-from .serializers import ActivitySerializer, DashboardSummarySerializer
+from .models import Activity, Report
+from .serializers import ActivitySerializer, DashboardSummarySerializer, ReportSerializer
 
 User = get_user_model()
 
@@ -68,6 +76,9 @@ class DashboardSummaryView(APIView):
             'tags': Tag.objects.count(),
             'meal_plans': MealPlan.objects.count(),
             'activities': Activity.objects.count(),
+            'pending_reports': Report.objects.filter(
+                status=Report.Status.PENDING,
+            ).count(),
         }
 
     def _most_rated(self):
@@ -165,3 +176,80 @@ class ActivityViewSet(viewsets.ReadOnlyModelViewSet):
         # The serializer nests the actor, and recipe is shown per row; without
         # this a page of 20 costs 40 extra queries.
         return Activity.objects.select_related('user', 'recipe')
+
+
+class ReportViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """/api/dashboard/reports/ - file a report, or work the queue.
+
+    Deliberately not a ModelViewSet: update and destroy are left out rather
+    than merely unused. A generic PATCH would let recipe/comment/reason be
+    rewritten after the fact, which is not what "resolving" a report means,
+    and ReportSerializer.validate()'s "exactly one target" rule only runs on
+    the fields present in a request - it cannot also police what a partial
+    update leaves out. `resolve` below is the one state change a report ever
+    makes.
+
+    Filing is IsRegisteredUser - a guest has nothing to lose by reporting
+    anonymously, which is exactly what would make the queue unusable. Every
+    other action is IsAdmin: a report naming you is not something you get to
+    read back, any more than another user's flag on your own recipe is
+    something you get to see coming.
+    """
+
+    serializer_class = ReportSerializer
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsRegisteredUser()]
+        return [IsAdmin()]
+
+    def get_queryset(self):
+        return Report.objects.select_related(
+            'reporter', 'resolved_by', 'recipe', 'comment',
+        )
+
+    filterset_fields = ['status', 'reason']
+
+    def perform_create(self, serializer):
+        # `recipe`/`comment` accept any primary key in either table; without
+        # this a registered user could report a draft invisible to them
+        # everywhere else, confirming by the response that it exists. Mirrors
+        # social.views.require_visible_recipe for the same reason.
+        recipe = serializer.validated_data.get('recipe')
+        comment = serializer.validated_data.get('comment')
+        target_recipe = recipe or comment.recipe
+
+        if not visible_recipes(self.request.user).filter(pk=target_recipe.pk).exists():
+            raise ValidationError({'recipe': 'That recipe does not exist.'})
+
+        serializer.save(reporter=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def resolve(self, request, pk=None):
+        """Close the report as resolved (action taken) or dismissed (not warranted).
+
+        The moderation action itself - unpublishing the recipe, deleting the
+        comment - happens through the existing admin/recipes and
+        admin/comments controls beforehand; this just marks the report
+        looked at, so it stops counting toward pending_reports and drops off
+        the default queue view.
+        """
+        report = self.get_object()
+        new_status = request.data.get('status')
+
+        if new_status not in (Report.Status.RESOLVED, Report.Status.DISMISSED):
+            raise ValidationError({
+                'status': 'Must be "resolved" or "dismissed".',
+            })
+
+        report.status = new_status
+        report.resolved_by = request.user
+        report.resolved_at = timezone.now()
+        report.save(update_fields=['status', 'resolved_by', 'resolved_at'])
+
+        return Response(self.get_serializer(report).data)

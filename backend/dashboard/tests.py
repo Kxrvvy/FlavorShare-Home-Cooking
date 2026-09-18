@@ -29,16 +29,20 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
+
 from meal_plans.models import MealPlan, MealPlanEntry
 from recipes.models import Recipe
 from social.models import Comment, Rating, SavedRecipe
 
-from .models import Activity
+from .models import Activity, Report
 
 User = get_user_model()
 
 SUMMARY_URL = '/api/dashboard/summary/'
 ACTIVITIES_URL = '/api/dashboard/activities/'
+REPORTS_URL = '/api/dashboard/reports/'
 
 
 class ActivityTestCase(TestCase):
@@ -110,14 +114,12 @@ class RecipeSignalTests(ActivityTestCase):
 
         self.assertFalse(Activity.objects.exists())
 
-    def test_unpublishing_logs_nothing(self):
-        """Documented gap, not an oversight.
-
-        Unpublishing is this project's soft moderation action, and none of the
-        ERD's five action types describes it - see the open item in CLAUDE.md.
-        Asserted so that adding a sixth type is a deliberate change rather than
-        something that silently alters the feed.
-        """
+    def test_unpublishing_by_direct_save_logs_nothing(self):
+        """No `_actor` on the instance means this did not come through
+        RecipeViewSet._set_status - a shell, a fixture, the Django admin -
+        and the signal has no one to credit, so it logs nothing rather than
+        guessing. The real unpublish path is covered by RecipeModerationTests
+        below, through the API where `_actor` is actually set."""
         self.publish()
         Activity.objects.all().delete()
 
@@ -526,3 +528,270 @@ class ActivityFeedTests(ReportTestCase):
         actor = self.feed()['results'][0]['user']
 
         self.assertEqual(sorted(actor), ['user_id', 'username'])
+
+
+class ReportModelTests(ReportTestCase):
+    """clean()'s rule, and the CheckConstraint that still holds if clean()
+    is skipped - a fixture, a shell, a data migration."""
+
+    def test_clean_refuses_neither_target(self):
+        report = Report(reporter=self.fan, reason=Report.Reason.SPAM)
+        with self.assertRaises(DjangoValidationError):
+            report.clean()
+
+    def test_clean_refuses_both_targets(self):
+        comment = Comment.objects.create(recipe=self.one, user=self.fan, content='x')
+        report = Report(
+            reporter=self.fan,
+            recipe=self.one,
+            comment=comment,
+            reason=Report.Reason.SPAM,
+        )
+        with self.assertRaises(DjangoValidationError):
+            report.clean()
+
+    def test_the_database_refuses_it_too(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Report.objects.create(reporter=self.fan, reason=Report.Reason.SPAM)
+
+
+class ReportApiTests(ReportTestCase):
+    """Filing is open to any registered user; everything past that is admin-only."""
+
+    def test_a_guest_cannot_file_one(self):
+        response = self.client.post(REPORTS_URL, {
+            'recipe': self.one.pk,
+            'reason': Report.Reason.SPAM,
+        })
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_a_registered_user_can_report_a_recipe(self):
+        self.client.force_authenticate(self.fan)
+        response = self.client.post(REPORTS_URL, {
+            'recipe': self.one.pk,
+            'reason': Report.Reason.INAPPROPRIATE,
+            'details': 'Copied from another site.',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['status'], Report.Status.PENDING)
+        self.assertEqual(response.data['reporter']['username'], 'eater')
+        self.assertEqual(response.data['recipe_title'], 'Adobo')
+
+    def test_a_registered_user_can_report_a_comment(self):
+        comment = Comment.objects.create(
+            recipe=self.one, user=self.fan, content='spam link',
+        )
+        self.client.force_authenticate(self.boss)
+        response = self.client.post(REPORTS_URL, {
+            'comment': comment.pk,
+            'reason': Report.Reason.SPAM,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['comment_content'], 'spam link')
+        self.assertEqual(response.data['comment_recipe'], self.one.pk)
+        self.assertIsNone(response.data['recipe'])
+
+    def test_naming_neither_target_is_a_400(self):
+        self.client.force_authenticate(self.fan)
+        response = self.client.post(REPORTS_URL, {'reason': Report.Reason.OTHER})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_naming_both_targets_is_a_400(self):
+        comment = Comment.objects.create(recipe=self.one, user=self.fan, content='x')
+        self.client.force_authenticate(self.fan)
+        response = self.client.post(REPORTS_URL, {
+            'recipe': self.one.pk,
+            'comment': comment.pk,
+            'reason': Report.Reason.OTHER,
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_hidden_draft_cannot_be_reported(self):
+        """A 400, not a 403 - the same reasoning as
+        social.views.require_visible_recipe: a permission error would
+        confirm the hidden draft exists."""
+        self.client.force_authenticate(self.fan)
+        response = self.client.post(REPORTS_URL, {
+            'recipe': self.hidden.pk,
+            'reason': Report.Reason.OTHER,
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_the_author_can_report_their_own_draft(self):
+        """Visibility, not ownership - a draft is visible to its author."""
+        self.client.force_authenticate(self.author)
+        response = self.client.post(REPORTS_URL, {
+            'recipe': self.hidden.pk,
+            'reason': Report.Reason.OTHER,
+        })
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_a_reporter_cannot_list_the_queue(self):
+        self.client.force_authenticate(self.fan)
+        self.assertEqual(
+            self.client.get(REPORTS_URL).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_an_admin_can_list_the_queue(self):
+        Report.objects.create(
+            reporter=self.fan, recipe=self.one, reason=Report.Reason.SPAM,
+        )
+        self.client.force_authenticate(self.boss)
+        response = self.client.get(REPORTS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+
+    def test_resolving_stamps_who_and_when(self):
+        report = Report.objects.create(
+            reporter=self.fan, recipe=self.one, reason=Report.Reason.SPAM,
+        )
+        self.client.force_authenticate(self.boss)
+        response = self.client.post(f'{REPORTS_URL}{report.pk}/resolve/', {
+            'status': Report.Status.RESOLVED,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        report.refresh_from_db()
+        self.assertEqual(report.status, Report.Status.RESOLVED)
+        self.assertEqual(report.resolved_by, self.boss)
+        self.assertIsNotNone(report.resolved_at)
+
+    def test_resolving_rejects_an_unknown_status(self):
+        report = Report.objects.create(
+            reporter=self.fan, recipe=self.one, reason=Report.Reason.SPAM,
+        )
+        self.client.force_authenticate(self.boss)
+        response = self.client.post(f'{REPORTS_URL}{report.pk}/resolve/', {
+            'status': 'pending',
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_reporter_cannot_resolve_their_own_report(self):
+        report = Report.objects.create(
+            reporter=self.fan, recipe=self.one, reason=Report.Reason.SPAM,
+        )
+        self.client.force_authenticate(self.fan)
+        response = self.client.post(f'{REPORTS_URL}{report.pk}/resolve/', {
+            'status': Report.Status.DISMISSED,
+        })
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class PendingReportsMetricTests(ReportTestCase):
+    def test_pending_reports_counts_only_pending(self):
+        Report.objects.create(
+            reporter=self.fan, recipe=self.one, reason=Report.Reason.SPAM,
+        )
+        Report.objects.create(
+            reporter=self.fan,
+            recipe=self.two,
+            reason=Report.Reason.OTHER,
+            status=Report.Status.DISMISSED,
+        )
+
+        self.client.force_authenticate(self.boss)
+        totals = self.client.get(SUMMARY_URL).data['totals']
+
+        self.assertEqual(totals['pending_reports'], 1)
+
+
+class RecipeModerationTests(APITestCase):
+    """The real unpublish path, through the endpoint that actually sets
+    `_actor` - RecipeSignalTests.test_unpublishing_by_direct_save_logs_nothing
+    covers what happens without it."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.REGISTERED,
+        )
+        cls.boss = User.objects.create_user(
+            username='moderator',
+            email='mod@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+
+    def setUp(self):
+        self.recipe = Recipe.objects.create(
+            user=self.author, title='Adobo', status=Recipe.Status.PUBLISHED,
+        )
+        Activity.objects.all().delete()
+
+    def test_an_admin_unpublishing_someone_elses_recipe_logs_moderated(self):
+        self.client.force_authenticate(self.boss)
+        response = self.client.post(f'/api/recipes/{self.recipe.pk}/unpublish/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        entry = Activity.objects.get()
+        self.assertEqual(entry.action_type, Activity.ActionType.MODERATED)
+        self.assertEqual(entry.user, self.boss)
+        self.assertIn('Adobo', entry.description)
+
+    def test_an_author_unpublishing_their_own_recipe_logs_nothing(self):
+        """Self-service, not moderation - the endpoint is dual-purpose, and
+        only the cross-user case is newsworthy."""
+        self.client.force_authenticate(self.author)
+        response = self.client.post(f'/api/recipes/{self.recipe.pk}/unpublish/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(Activity.objects.exists())
+
+
+class CommentModerationTests(APITestCase):
+    """The other moderation path: an admin removing someone else's review."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.author = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.REGISTERED,
+        )
+        cls.fan = User.objects.create_user(
+            username='eater',
+            email='eater@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.REGISTERED,
+        )
+        cls.boss = User.objects.create_user(
+            username='moderator',
+            email='mod@example.com',
+            password='n0t-a-real-password',
+            role=User.Role.ADMIN,
+        )
+        cls.recipe = Recipe.objects.create(
+            user=cls.author, title='Adobo', status=Recipe.Status.PUBLISHED,
+        )
+
+    def setUp(self):
+        self.comment = Comment.objects.create(
+            recipe=self.recipe, user=self.fan, content='Needs more vinegar.',
+        )
+        Activity.objects.all().delete()
+
+    def test_an_admin_deleting_someone_elses_comment_logs_moderated(self):
+        self.client.force_authenticate(self.boss)
+        response = self.client.delete(f'/api/social/comments/{self.comment.pk}/')
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        entry = Activity.objects.get()
+        self.assertEqual(entry.action_type, Activity.ActionType.MODERATED)
+        self.assertEqual(entry.user, self.boss)
+        self.assertIn('eater', entry.description)
+
+    def test_a_user_deleting_their_own_comment_logs_nothing(self):
+        self.client.force_authenticate(self.fan)
+        response = self.client.delete(f'/api/social/comments/{self.comment.pk}/')
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Activity.objects.exists())

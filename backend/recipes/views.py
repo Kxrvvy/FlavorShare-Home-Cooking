@@ -210,6 +210,15 @@ class RecipeViewSet(viewsets.ModelViewSet):
 
     def _set_status(self, recipe, status):
         """Run a status change through the serializer's publish gate."""
+        # Stashed for dashboard.signals.log_recipe, which cannot otherwise
+        # tell "the author pulled their own draft back" (self-service, not
+        # logged) from "an admin unpublished someone else's recipe" (the
+        # moderation action Feature 8 asks the Activity log to show). Same
+        # pattern as dashboard.signals.remember_recipe_status stashing
+        # _status_before_save on pre_save - a signal only sees the row, never
+        # who asked for the change, unless a caller leaves it a note first.
+        recipe._actor = self.request.user
+
         serializer = RecipeWriteSerializer(
             recipe,
             data={'status': status},

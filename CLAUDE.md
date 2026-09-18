@@ -96,7 +96,7 @@ role, see User Roles below*:
 8. **Admin Dashboard & Reporting** — totals, pending moderation, most
    rated/saved recipes, recent activity, monthly activity chart
 9. **Nutrition Information** — auto-fetched nutrition facts per recipe
-   via an external nutrition API (deferred — not yet integrated)
+   via Edamam's Recipe Analysis API, fetched lazily on first view and cached
 10. **Email Notifications** — new comment/rating alerts, meal plan
     reminders via **Brevo**
 
@@ -113,7 +113,7 @@ role, see User Roles below*:
   ingredients, ratings, comments, saved recipes, meal plans), organized
   into connected tables (proper PK/FK relationships).
 - **External Integrations**
-  - Nutrition API — calculates calories/macros per recipe (not yet chosen/integrated)
+  - Nutrition API — Edamam Recipe Analysis calculates calories/macros per recipe
   - Brevo — sends email notifications
 - **Image Handling** — Cloudinary stores and resizes uploaded photos.
 - **Security Layer** — hashed passwords, role-based access control,
@@ -127,7 +127,8 @@ role, see User Roles below*:
 - Personal Recipe Collection → `SavedRecipe` join table (User ↔ Recipe)
 - Ratings & Reviews → own tables, linked to both User and Recipe
 - Meal Plan Generator → pulls from a user's saved/published recipes
-- Nutrition Info → fetched from external API when a recipe is created/viewed (pending)
+- Nutrition Info → fetched from Edamam the first time a recipe is viewed by a
+  signed-in user, then cached (`meal_plans/nutrition.py`, `NutritionInfoViewSet.fetch`)
 - Email Notifications → triggered by events (new comment, new rating), sent via Brevo
 - Admin Dashboard & Moderation → Admin-only; pulls stats directly from the database
 
@@ -208,10 +209,13 @@ correct and complete as of the last review.
   are never deleted, so one holding a username for an abandoned signup would
   block that username forever. Accepted at this scale; worth knowing before
   anyone treats pending usernames as reserved.
-- **Expired `PendingSignup` / `OneTimeCode` rows are never deleted.** Nothing
-  breaks — every read goes through `.active()`, and re-registering an address
-  replaces its expired row — but the tables grow. A management command or
-  scheduled cleanup task is depth-pass work.
+- **Expired `PendingSignup` / `OneTimeCode` rows were never deleted** — solved
+  by `python manage.py cleanup_expired_tokens` (`accounts/management/commands/`),
+  which deletes both tables' `.expired()` rows in one query each (`--dry-run`
+  to preview counts first). Nothing calls it on a schedule yet — there is no
+  background task runner in this project — so it is still a "run it by hand,
+  or point cron/a host's scheduled-task feature at it" tool rather than
+  something that runs itself.
 - **Framework tables:** Django and SimpleJWT create their own tables in
   `flavorshare_db` (sessions, migrations, content types, permissions,
   admin log, token blacklist), so the live database holds more tables
@@ -230,7 +234,7 @@ correct and complete as of the last review.
 - **Auth:** JWT (`djangorestframework-simplejwt`)
 - **Image Storage:** Cloudinary
 - **Email Service:** Brevo (`brevo-python`; was Resend — see below)
-- **Nutrition API:** not yet chosen (deferred)
+- **Nutrition API:** Edamam Recipe Analysis (`meal_plans/nutrition.py`)
 - **Hosting:** Vercel (frontend) + **Render** (backend, free tier)
 
 ### Hosting decision notes
@@ -294,11 +298,11 @@ correct and complete as of the last review.
 | Auth & security (hashing, RBAC, input validation, SQLi/XSS protection, sessions) | Django defaults + DRF |
 | Dashboard & reporting | Admin Dashboard feature |
 | Search, filter, sort, pagination | `django-filter` + DRF pagination |
-| External API integration | Cloudinary (images) and Brevo (email) both integrated; nutrition API deferred |
+| External API integration | Cloudinary (images), Brevo (email), and Edamam (nutrition) all integrated |
 
-**Open item:** confirm with instructor whether Django counts as an
-"approved server-side technology" (rubric explicitly names PHP as the
-default example).
+**Resolved:** instructor confirmed Django counts as an approved
+server-side technology (rubric names PHP only as the default example, not
+as a requirement).
 
 ### Search, filter and sort — two decisions worth knowing
 
@@ -396,29 +400,43 @@ Each app follows the same internal structure:
 - Auth: JWT
 - Image storage: Cloudinary
 - Email service: Brevo (switched from Resend)
+- Nutrition API: Edamam Recipe Analysis — chosen over Spoonacular/USDA
+  FoodData Central/CalorieNinjas because it takes a title plus plain-English
+  ingredient lines (what `RecipeIngredient`'s free-typed name+quantity+unit
+  already is) and returns whole-recipe macros in one call; the others all
+  need each ingredient resolved to a specific food id first. Built:
+  `meal_plans/nutrition.py` (the client) and
+  `NutritionInfoViewSet.fetch` (`meal_plans/views.py`) populate `NutritionInfo`
+  lazily, the first time a signed-in user views a recipe, and cache it rather
+  than re-asking Edamam's rate-limited free tier on every view. `EDAMAM_APP_ID`
+  / `EDAMAM_APP_KEY` are blank by default — see README.md for getting a free
+  pair.
 - Hosting: Vercel (frontend) + Render (backend)
 - Full ERD (15 tables) — built and reviewed
 - 5-app Django structure — built and reviewed
 - User roles (3) — finalized
 - Proposed features (10) — finalized
+- **Pending moderation metric, and moderation's Activity-log gap** — both
+  were the same open item below for the same reason: nothing recorded that a
+  recipe or review *had been* reported, or that an admin (rather than an
+  author) had acted on one. Resolved together: `dashboard.Report` is a 16th
+  table, past the original ERD on purpose (see its own docstring), that a
+  registered user files a report into and an admin resolves or dismisses;
+  `DashboardSummaryView` now counts `pending_reports` for real. Separately,
+  `Activity.ActionType` gained a sixth value, `MODERATED`, logged only when
+  the actor unpublishing a recipe or deleting a comment is not its author -
+  self-service still logs nothing, the same as it always has. See
+  `dashboard/models.py`, `dashboard/signals.py` and `dashboard/views.py`.
 
 **Not yet decided / not yet built:**
-- Nutrition API provider (Edamam vs. Spoonacular vs. other) — deferred
-- Instructor confirmation that Django satisfies "approved server-side technology"
-- Actual `CREATE TABLE` DB script (in progress by a teammate) — note that
-  Django enforces `on_delete` in the ORM, not in DDL: the FKs it generates are
-  all `ON DELETE NO ACTION`, so a hand-written script using `ON DELETE CASCADE`
-  / `SET NULL` will not match the live database's constraints even when the
-  application behaviour agrees. See the note in `dashboard/models.py`.
+- Actual `CREATE TABLE` DB script (in progress by a teammate) — still just a
+  reference alongside Django's migrations, not what the live database runs
+  off of; `backend/flavorshare.sql` now carries its own header note explaining
+  why its `ON DELETE` clauses will not match the live schema even where the
+  intended behaviour agrees (Django's generated DDL is always `NO ACTION`
+  regardless of a model's `on_delete`), and flagging the one place they
+  disagree on more than DDL mechanics - every `user_id` FK here is CASCADE,
+  where nearly every one in the models is PROTECT, because removing a user is
+  a deactivation, not a delete. See the note in `dashboard/models.py` for the
+  DDL-mechanics half in more depth.
 - Frontend folder/page structure (not yet discussed)
-- **Pending moderation metric** — Feature 8 lists it on the Admin Dashboard,
-  but nothing in the ERD records that a recipe or review *was* reported, so
-  there is no queue to count. Needs a decision: add a 16th table (`Flag` or
-  `Report`) or redefine the metric as something derivable. Deliberately not
-  implemented rather than filled with a fabricated number.
-- **Moderation is invisible to the Activity log** — `Activity.action_type` has
-  the ERD's five values (posted/edited/commented/rated/saved), none of which
-  describes unpublishing, this project's soft moderation action. So an admin
-  taking a recipe out of public view logs nothing, and the recent-activity feed
-  cannot show moderation history. Adding a sixth value is an ERD change; parked
-  with the item above since both point at the same gap.

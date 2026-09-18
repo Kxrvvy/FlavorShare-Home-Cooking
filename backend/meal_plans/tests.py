@@ -20,15 +20,16 @@ desired one).
 """
 
 import datetime as dt
+from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from recipes.models import Recipe
+from recipes.models import Ingredient, Recipe, RecipeIngredient
 from social.models import SavedRecipe
 
 from .models import MealPlan, MealPlanEntry, NutritionInfo
@@ -38,6 +39,7 @@ User = get_user_model()
 PLANS_URL = '/api/meal-plans/'
 ENTRIES_URL = '/api/meal-plans/entries/'
 NUTRITION_URL = '/api/meal-plans/nutrition/'
+NUTRITION_FETCH_URL = '/api/meal-plans/nutrition/fetch/'
 
 
 class MealPlanTestCase(APITestCase):
@@ -526,6 +528,134 @@ class NutritionApiTests(MealPlanTestCase):
             response.status_code,
             status.HTTP_405_METHOD_NOT_ALLOWED,
         )
+
+
+@override_settings(EDAMAM_APP_ID='test-app-id', EDAMAM_APP_KEY='test-app-key')
+class NutritionFetchApiTests(MealPlanTestCase):
+    """The one write path onto NutritionInfo. requests.post is mocked
+    throughout - these tests are about the view's own logic (visibility,
+    caching, status-code mapping), not about Edamam actually answering."""
+
+    def add_ingredient(self, recipe, name='rice', quantity=2, unit='cup'):
+        ingredient = Ingredient.objects.create(name=name)
+        RecipeIngredient.objects.create(
+            recipe=recipe, ingredient=ingredient, quantity=quantity, unit=unit,
+        )
+
+    def edamam_response(self, calories=500, protein=20, carbs=60, fat=15):
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {
+            'calories': calories,
+            'totalNutrients': {
+                'PROCNT': {'quantity': protein, 'unit': 'g'},
+                'CHOCDF': {'quantity': carbs, 'unit': 'g'},
+                'FAT': {'quantity': fat, 'unit': 'g'},
+            },
+        }
+        return response
+
+    def test_guests_cannot_fetch(self):
+        response = self.client.post(NUTRITION_FETCH_URL, {'recipe': self.my_published.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_missing_recipe_id_is_a_400(self):
+        self.client.force_authenticate(self.me)
+
+        response = self.client.post(NUTRITION_FETCH_URL, {})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_an_invisible_recipe_is_a_400_not_a_403(self):
+        """Same reasoning as social.views.require_visible_recipe: a 403 would
+        confirm somebody else's draft exists."""
+        self.client.force_authenticate(self.me)
+
+        response = self.client.post(NUTRITION_FETCH_URL, {'recipe': self.her_draft.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_recipe_with_no_ingredients_is_a_502(self):
+        """Nothing to send Edamam - _ingredient_lines() comes back empty."""
+        self.client.force_authenticate(self.me)
+
+        with patch('meal_plans.nutrition.requests.post') as post:
+            response = self.client.post(
+                NUTRITION_FETCH_URL, {'recipe': self.my_published.pk},
+            )
+
+        post.assert_not_called()
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+
+    @override_settings(EDAMAM_APP_ID='', EDAMAM_APP_KEY='')
+    def test_missing_credentials_is_a_503(self):
+        self.add_ingredient(self.my_published)
+        self.client.force_authenticate(self.me)
+
+        with patch('meal_plans.nutrition.requests.post') as post:
+            response = self.client.post(
+                NUTRITION_FETCH_URL, {'recipe': self.my_published.pk},
+            )
+
+        post.assert_not_called()
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    def test_a_successful_fetch_populates_and_returns_macros(self):
+        self.add_ingredient(self.my_published)
+        self.client.force_authenticate(self.me)
+
+        with patch('meal_plans.nutrition.requests.post') as post:
+            post.return_value = self.edamam_response()
+            response = self.client.post(
+                NUTRITION_FETCH_URL, {'recipe': self.my_published.pk},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['calories'], '500.00')
+        self.assertEqual(response.data['protein'], '20.00')
+
+        info = NutritionInfo.objects.get(recipe=self.my_published)
+        self.assertEqual(info.carbs, 60)
+        self.assertEqual(info.fat, 15)
+
+    def test_a_second_fetch_is_served_from_cache(self):
+        """Edamam's free tier is rate-limited - a cached row must not be
+        re-fetched just because the page was viewed again."""
+        self.add_ingredient(self.my_published)
+        self.client.force_authenticate(self.me)
+
+        with patch('meal_plans.nutrition.requests.post') as post:
+            post.return_value = self.edamam_response()
+            self.client.post(NUTRITION_FETCH_URL, {'recipe': self.my_published.pk})
+            second = self.client.post(
+                NUTRITION_FETCH_URL, {'recipe': self.my_published.pk},
+            )
+
+        post.assert_called_once()
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.data['calories'], '500.00')
+
+    def test_a_failed_fetch_is_retried_next_time(self):
+        """The row `fetch` leaves behind after a failure (every macro null)
+        must not be mistaken for a cached success on the next request."""
+        self.add_ingredient(self.my_published)
+        self.client.force_authenticate(self.me)
+
+        with patch('meal_plans.nutrition.requests.post') as post:
+            post.return_value = Mock(ok=False, status_code=402, text='quota exceeded')
+            first = self.client.post(
+                NUTRITION_FETCH_URL, {'recipe': self.my_published.pk},
+            )
+
+            post.return_value = self.edamam_response()
+            second = self.client.post(
+                NUTRITION_FETCH_URL, {'recipe': self.my_published.pk},
+            )
+
+        self.assertEqual(first.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(NutritionInfo.objects.count(), 1)
 
 
 class DeletionTests(TestCase):

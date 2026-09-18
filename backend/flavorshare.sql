@@ -1,3 +1,36 @@
+-- NOTE ON THIS SCRIPT VS. THE LIVE DATABASE (added after the fact, not a fix
+-- to apply - read before "correcting" either side to match the other):
+--
+-- This project's actual tables come from Django's migrations
+-- (`python manage.py migrate`), not from running this file. Model definitions
+-- live in each app's models.py, and their `on_delete` there is what really
+-- governs deletion behaviour. This script is a hand-maintained reference for
+-- the ERD/rubric, kept in step by hand rather than generated - so it drifts
+-- from the live schema on two separate axes, and it is worth knowing both
+-- before assuming a mismatch here is a bug in either file:
+--
+-- 1. Django enforces `on_delete` in the ORM's collector, in Python, at
+--    `.delete()` time - never in the schema. Whatever a model's `on_delete`
+--    says, the FK Django actually generates at the database level is always
+--    `ON DELETE NO ACTION`. So even a table below that matches a model's
+--    *behaviour* exactly (say, `RecipeIngredient` CASCADE-ing off `Recipe`)
+--    does not match the live database's *constraint* - Django's migration for
+--    that same column reads NO ACTION, not CASCADE, at the DDL level. See the
+--    longer version of this note in `dashboard/models.py`, which documents it
+--    against one specific column (`Activity.recipe_id`).
+--
+-- 2. Several tables here also disagree with the model layer on the *intended*
+--    behaviour, not just its DDL encoding - most visibly, every `user_id`
+--    foreign key below is `ON DELETE CASCADE`. In the actual application, a
+--    user is never hard-deleted: removing an account is a deactivation
+--    (`is_active = FALSE`, see `accounts.views.AdminUserViewSet.perform_destroy`),
+--    specifically so a person's recipes, ratings and reviews survive them.
+--    Nearly every `user_id` FK in the Django models is `PROTECT`, not CASCADE,
+--    for exactly that reason - a hard delete through Django is meant to be
+--    refused, not cascaded. If this script is ever run against a real
+--    deployment rather than used as a reference, running it as-is would let a
+--    `DELETE FROM Users` silently take a person's entire history with it,
+--    which the application itself is designed to prevent.
 CREATE DATABASE IF NOT EXISTS flavorshare_db;
 USE flavorshare_db;
 

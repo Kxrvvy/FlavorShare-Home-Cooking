@@ -9,7 +9,13 @@
  * second copy of that is exactly the kind of thing that drifts.
  */
 
-import { request, type CommentRow, type Paginated, type RatingRow } from "@/features/recipes/api";
+import {
+  request,
+  type CommentRow,
+  type Paginated,
+  type RatingRow,
+  type ReportReason,
+} from "@/features/recipes/api";
 
 export interface DashboardTotals {
   users: number;
@@ -22,6 +28,7 @@ export interface DashboardTotals {
   tags: number;
   meal_plans: number;
   activities: number;
+  pending_reports: number;
 }
 
 export interface LeaderboardRecipe {
@@ -188,4 +195,54 @@ export async function updateTag(tagId: number, name: string) {
  * than letting Django's ProtectedError surface as a 500. */
 export async function deleteTag(tagId: number) {
   return request<void>(`/social/tags/${tagId}/`, { method: "DELETE" });
+}
+
+/* ---------------------------------------------------------------- reports
+ *
+ * The moderation queue. Filing itself (createReport) lives in
+ * features/recipes/api.ts - any registered user can do that, not just an
+ * admin - this file only covers the admin-only half: reading the queue and
+ * resolving an entry.
+ */
+
+export interface ReportRow {
+  report_id: number;
+  reporter: { user_id: number; username: string };
+  recipe: number | null;
+  recipe_title: string | null;
+  comment: number | null;
+  comment_content: string | null;
+  comment_recipe: number | null;
+  reason: ReportReason;
+  details: string;
+  status: "pending" | "resolved" | "dismissed";
+  resolved_by: { user_id: number; username: string } | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export async function listReports(params: {
+  status?: ReportRow["status"];
+  reason?: ReportReason;
+  page?: number;
+} = {}) {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.reason) query.set("reason", params.reason);
+  if (params.page) query.set("page", String(params.page));
+
+  return request<Paginated<ReportRow>>(`/dashboard/reports/?${query.toString()}`);
+}
+
+/** Marks the report closed without taking any action on its target - that
+ * still happens through the existing recipe/comment moderation controls,
+ * beforehand and separately. */
+export async function resolveReport(
+  reportId: number,
+  status: "resolved" | "dismissed"
+) {
+  return request<ReportRow>(`/dashboard/reports/${reportId}/resolve/`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
 }

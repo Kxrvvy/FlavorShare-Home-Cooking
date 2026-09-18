@@ -139,6 +139,13 @@ class CommentViewSet(UserContentViewSet):
     model = Comment
     serializer_class = CommentSerializer
 
+    def perform_destroy(self, instance):
+        # Stashed for dashboard.signals.log_comment_removed, which has no
+        # other way to tell an admin's removal of someone else's review from
+        # an author deleting their own - see that receiver for the reasoning.
+        instance._actor = self.request.user
+        instance.delete()
+
 
 class RecipeTagViewSet(RecipeChildViewSet):
     """/api/social/recipe-tags/ - which tags a recipe carries.
