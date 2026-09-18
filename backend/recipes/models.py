@@ -94,6 +94,29 @@ class Recipe(models.Model):
     # description TEXT
     description = models.TextField(blank=True, null=True)
 
+    # body TEXT  [not in flavorshare.sql]
+    #
+    # The long-form prose below the hero photo in the reference design
+    # (Downloads/Cover/4.1 Recipe Page.png) - a headnote, cooking tips, the
+    # kind of writing `description` is too short a field for. Plain text, not
+    # markup: rendered as paragraphs split on a blank line, nothing richer.
+    # The design's own sub-headings within that block ("DO'S", "DON'TS") are
+    # simply typed as part of the prose rather than parsed out as structure -
+    # a single TextField has no notion of a heading, and inventing one would
+    # be a rich-text editor this project does not have.
+    body = models.TextField(blank=True, null=True)
+
+    # equipment TEXT  [not in flavorshare.sql]
+    #
+    # What the reference design's "Equipment needed for preparation" panel
+    # lists - one tool per line, the same free-typed shape as `body` rather
+    # than a related table. A dedicated EquipmentItem model would only be
+    # worth its own table if equipment were ever queried or reused the way
+    # Ingredient is (search, tagging, a lookup shared across recipes); nothing
+    # here needs that, so it stays a single field the frontend splits on
+    # newlines to render as a list.
+    equipment = models.TextField(blank=True, null=True)
+
     # cuisine_type VARCHAR(50)
     cuisine_type = models.CharField(max_length=50, blank=True, null=True)
 
@@ -276,6 +299,15 @@ class Step(models.Model):
 
     # step_number INT NOT NULL
     step_number = models.PositiveIntegerField()
+
+    # title VARCHAR(100)  [not in flavorshare.sql]
+    #
+    # The short heading the reference design (Downloads/Cover/4.1 Recipe
+    # Page.png) gives each step - "PREHEAT AND PREPARE", "CITRUS INFUSION" -
+    # shown above the instruction text rather than replacing it. Optional:
+    # a step written without one still renders, just without a heading over
+    # it, which is how every step written before this field existed reads.
+    title = models.CharField(max_length=100, blank=True, null=True)
 
     # instruction TEXT NOT NULL
     instruction = models.TextField()

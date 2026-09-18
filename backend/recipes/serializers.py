@@ -143,7 +143,7 @@ class StepSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Step
-        fields = ['step_id', 'recipe', 'step_number', 'instruction', 'images']
+        fields = ['step_id', 'recipe', 'step_number', 'title', 'instruction', 'images']
 
         # Drops the UniqueTogetherValidator DRF would build from the model's
         # (recipe, step_number) constraint. It does two things we don't want:
@@ -367,6 +367,8 @@ class RecipeDetailSerializer(RecipeListSerializer):
 
     class Meta(RecipeListSerializer.Meta):
         fields = RecipeListSerializer.Meta.fields + [
+            'body',
+            'equipment',
             'steps',
             'recipe_ingredients',
             'images',
@@ -391,6 +393,8 @@ class RecipeWriteSerializer(serializers.ModelSerializer):
             'user',
             'title',
             'description',
+            'body',
+            'equipment',
             'cuisine_type',
             'prep_time',
             'cook_time',

@@ -1,15 +1,20 @@
 "use client";
 
 /* The public recipe page: RecipePreview's rendering, plus the things a
- * finished recipe needs that a preview does not - a rating, reviews, and a
- * way to save it.
+ * finished recipe needs that a preview does not - a rating, reviews, nutrition,
+ * and a way to save it.
  *
- * Deliberately not the full page the original ComingSoon stub described.
- * That one needs Step.title, Recipe.equipment, Recipe.body, User.bio and
- * User.avatar_url, none of which exist yet - see app/recipes/[id]/page.tsx.
- * This renders exactly what the builder already collects, the same way the
- * builder's own preview does, and Ratings & Reviews attach to that rather
- * than waiting on the rest.
+ * Nutrition is the one thing RecipePreview cannot render for itself: it comes
+ * from Edamam, fetched for a real, saved recipe, never for a draft still being
+ * written in the builder. It is passed in through RecipePreview's
+ * `extraSidebar` slot instead - the same cream sidebar Ingredients and
+ * Equipment already sit in, not a section of its own.
+ *
+ * Still deliberately not the full page the original ComingSoon stub
+ * described - that one also needs User.bio and User.avatar_url for a real
+ * author card, which do not exist yet. Everything else the stub asked for
+ * (Step.title, Recipe.equipment, Recipe.body) is real now; see
+ * app/recipes/[id]/page.tsx for what that page still defers.
  */
 
 import Link from "next/link";
@@ -90,14 +95,47 @@ function macro(value: string | null): string {
   return Number.isNaN(num) ? "-" : String(Math.round(num));
 }
 
-function NutritionStat({ label, value, unit }: { label: string; value: string | null; unit: string }) {
+function NutritionRow({ label, value, unit }: { label: string; value: string | null; unit: string }) {
   return (
-    <div className="rounded-xl border border-rule bg-panel/60 px-4 py-3 text-center">
-      <p className="font-display text-lg font-semibold text-ink">
-        {macro(value)}
-        {value != null && <span className="ml-0.5 text-xs font-normal text-muted">{unit}</span>}
-      </p>
-      <p className="mt-0.5 text-xs text-muted">{label}</p>
+    <li className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-ink">{label}</span>
+      <span className="font-semibold text-ink">
+        {value != null ? `${macro(value)} ${unit}` : "-"}
+      </span>
+    </li>
+  );
+}
+
+/** The sidebar card RecipePreview's `extraSidebar` slot renders, next to
+ * Ingredients and Equipment - matches their own card styling rather than
+ * inventing a fourth look for one more panel in the same column. */
+function NutritionCard({
+  state,
+  nutrition,
+}: {
+  state: "loading" | "ready" | "unavailable";
+  nutrition: NutritionInfoRow | null;
+}) {
+  return (
+    <div className="rounded-2xl bg-panel p-6">
+      <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
+        Nutritional value
+      </h2>
+
+      {state === "loading" && <p className="mt-3 text-sm text-muted">Looking this up...</p>}
+
+      {state === "unavailable" && (
+        <p className="mt-3 text-sm text-muted">Not available right now.</p>
+      )}
+
+      {state === "ready" && (
+        <ul className="mt-4 flex flex-col gap-2">
+          <NutritionRow label="Calories" value={nutrition?.calories ?? null} unit="kcal" />
+          <NutritionRow label="Protein" value={nutrition?.protein ?? null} unit="g" />
+          <NutritionRow label="Carbs" value={nutrition?.carbs ?? null} unit="g" />
+          <NutritionRow label="Fat" value={nutrition?.fat ?? null} unit="g" />
+        </ul>
+      )}
     </div>
   );
 }
@@ -325,6 +363,8 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
         <RecipePreview
           title={recipe.title}
           description={recipe.description ?? ""}
+          body={recipe.body ?? ""}
+          equipment={recipe.equipment ?? ""}
           servings={recipe.servings != null ? String(recipe.servings) : ""}
           prepTime={recipe.prep_time != null ? `${recipe.prep_time} min` : ""}
           cookTime={recipe.cook_time != null ? `${recipe.cook_time} min` : ""}
@@ -340,10 +380,14 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
           }))}
           steps={steps.map((row) => ({
             key: String(row.step_id),
+            title: row.title ?? undefined,
             text: row.instruction,
             preview: row.images[0]?.url ?? null,
           }))}
           author={recipe.user?.username}
+          extraSidebar={
+            canAct && <NutritionCard state={nutritionState} nutrition={nutrition} />
+          }
         />
       </div>
 
@@ -401,32 +445,6 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
           <ReportButton target={{ recipe: recipeId }} label="Report this recipe" />
         )}
       </section>
-
-      {/* ----------------------------------------------------- nutrition */}
-      {canAct && (
-        <section className="mx-auto mt-10 max-w-[620px] border-t border-rule pt-8">
-          <h2 className="font-display text-xl font-semibold text-ink">Nutrition</h2>
-
-          {nutritionState === "loading" && (
-            <p className="mt-3 text-sm text-muted">Looking this up...</p>
-          )}
-
-          {nutritionState === "unavailable" && (
-            <p className="mt-3 text-sm text-muted">
-              Nutrition info isn&apos;t available for this recipe right now.
-            </p>
-          )}
-
-          {nutritionState === "ready" && (
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <NutritionStat label="Calories" value={nutrition?.calories ?? null} unit="kcal" />
-              <NutritionStat label="Protein" value={nutrition?.protein ?? null} unit="g" />
-              <NutritionStat label="Carbs" value={nutrition?.carbs ?? null} unit="g" />
-              <NutritionStat label="Fat" value={nutrition?.fat ?? null} unit="g" />
-            </div>
-          )}
-        </section>
-      )}
 
       {/* ------------------------------------------------------- reviews */}
       <section className="mx-auto mt-12 max-w-[620px]">

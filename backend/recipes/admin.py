@@ -65,7 +65,7 @@ class StepInline(admin.TabularInline):
 
     model = Step
     extra = 1
-    fields = ('step_number', 'instruction')
+    fields = ('step_number', 'title', 'instruction')
     ordering = ('step_number',)
 
 
