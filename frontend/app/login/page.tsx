@@ -92,8 +92,12 @@ export default function LoginPage() {
       setSession({ access, refresh }, meResponse.data);
 
       /* Back to whatever sent them here - the Create Recipe button arrives as
-       * /login?next=/recipes/create - and '/' when nothing did. /dashboard does
-       * not exist, so logging in successfully used to end on a 404.
+       * /login?next=/recipes/create - and, when nothing did, wherever this
+       * account actually lands: the admin dashboard for an admin, '/' for
+       * everyone else. An admin's own account has no ordinary use for the
+       * public homepage as a landing page, and making them click through to
+       * the panel by hand every sign-in is the kind of friction nobody
+       * should have to ask for twice.
        *
        * Read here rather than through useSearchParams because nothing on this
        * page *renders* the value; it is only needed at the moment we navigate.
@@ -103,7 +107,8 @@ export default function LoginPage() {
        * attacker-supplied value safe to follow.
        */
       const next = new URLSearchParams(window.location.search).get('next');
-      router.push(safeNextPath(next));
+      const fallback = meResponse.data.role === 'admin' ? '/admin/dashboard' : '/';
+      router.push(safeNextPath(next, fallback));
     } catch (error: unknown) {
       // axios.isAxiosError narrows this properly, so the response body can be
       // read without an `any`. A network failure - the backend not running -

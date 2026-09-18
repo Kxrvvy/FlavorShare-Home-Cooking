@@ -118,6 +118,18 @@ export function setSession(tokens: SessionTokens, user: SessionUser): void {
   notify();
 }
 
+/** Overwrite the cached user without touching the tokens - what a profile
+ * edit needs, as opposed to setSession's "a whole new session just began".
+ * Keeps every subscribed component (the header, AdminShell) in sync the
+ * moment a PATCH to /accounts/me/ succeeds, with no page reload. */
+export function updateSessionUser(user: SessionUser): void {
+  const store = storage();
+  if (!store) return;
+
+  store.setItem(USER_KEY, JSON.stringify(user));
+  notify();
+}
+
 export function getAccessToken(): string | null {
   return storage()?.getItem(ACCESS_KEY) ?? null;
 }
