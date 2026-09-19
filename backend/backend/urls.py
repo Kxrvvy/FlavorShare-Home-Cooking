@@ -8,17 +8,17 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
-from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
-    TokenRefreshView,
-    TokenVerifyView,
-)
+from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
+
+from accounts.token import LockoutTokenObtainPairView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
 
-    # JWT authentication
-    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    # JWT authentication. /api/token/ is accounts.token.LockoutTokenObtainPairView,
+    # not SimpleJWT's own TokenObtainPairView - same endpoint and response
+    # shape, plus a lockout after repeated failed attempts. See that module.
+    path('api/token/', LockoutTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'),
 

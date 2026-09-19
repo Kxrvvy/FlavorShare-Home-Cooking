@@ -19,6 +19,7 @@ or need a real API key - a green run says nothing about whether BREVO_API_KEY
 works, the same caveat recipes/tests.py carries about Cloudinary.
 """
 
+import time
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from brevo.core import ApiError
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AnonymousUser
+from django.core.cache import cache
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
@@ -36,6 +38,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
@@ -337,6 +340,116 @@ class AdminSiteAccessTests(TestCase):
         self.assertFalse(self.client.login(
             username='boss', password='n0t-a-real-password'
         ))
+
+
+class LoginLockoutTests(APITestCase):
+    """accounts.token.LockoutTokenObtainPairView - three wrong passwords
+    lock a username out for fifteen minutes."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='the-real-password',
+        )
+
+    def setUp(self):
+        # The lockout lives in Django's cache, not the database, so
+        # TestCase's transaction rollback between tests never clears it -
+        # without this, a lockout set by one test would still be in effect
+        # for the next one that happens to reuse "cook".
+        cache.clear()
+
+    def login(self, password):
+        return self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': 'cook', 'password': password},
+        )
+
+    def test_a_correct_password_succeeds(self):
+        response = self.login('the-real-password')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('access', response.data)
+
+    def test_a_wrong_password_is_a_401_below_the_limit(self):
+        response = self.login('wrong')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_the_third_wrong_password_locks_the_account(self):
+        self.login('wrong')
+        self.login('wrong')
+        third = self.login('wrong')
+
+        self.assertEqual(third.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn('15 minutes', third.data['detail'])
+
+    def test_a_lockout_refuses_even_the_correct_password(self):
+        """The block is on the username, not on the wrong guesses - it has
+        to hold even once the right password is finally offered."""
+        self.login('wrong')
+        self.login('wrong')
+        self.login('wrong')
+
+        response = self.login('the-real-password')
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_a_correct_login_forgives_earlier_failures(self):
+        """Two wrong guesses do not linger - a correct login in between
+        resets the count, so it takes three more wrong guesses, not one,
+        to lock the account afterward."""
+        self.login('wrong')
+        self.login('wrong')
+        self.login('the-real-password')
+
+        self.login('wrong')
+        self.login('wrong')
+        third_since_reset = self.login('wrong')
+
+        self.assertEqual(
+            third_since_reset.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    def test_the_lockout_is_scoped_to_one_username(self):
+        User.objects.create_user(
+            username='baker',
+            email='baker@example.com',
+            password='another-real-password',
+        )
+
+        self.login('wrong')
+        self.login('wrong')
+        self.login('wrong')
+
+        response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': 'baker', 'password': 'another-real-password'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_an_unknown_username_is_tracked_the_same_way(self):
+        """Locking out logins for a username that was never registered is
+        not a leak - the response is identical to a wrong password on a real
+        account either way, so this cannot be used to test which usernames
+        exist."""
+        for _ in range(3):
+            response = self.client.post(
+                reverse('token_obtain_pair'),
+                {'username': 'nobody-by-this-name', 'password': 'whatever'},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_the_lockout_expires_after_fifteen_minutes(self):
+        self.login('wrong')
+        self.login('wrong')
+        self.login('wrong')
+
+        with patch('accounts.token.time.time', return_value=time.time() + 15 * 60 + 1):
+            response = self.login('the-real-password')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
 class LogoutTests(APITestCase):
@@ -1611,3 +1724,63 @@ class PasswordResetTests(SignupFlowTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertTrue(self.user.check_password(NEW_PASSWORD))
+
+
+class AccountsThrottleTests(SignupFlowTestCase):
+    """The 'auth_email' ScopedRateThrottle on RegisterView actually enforces
+    a limit. settings.REST_FRAMEWORK's real rates are None for the whole
+    test run (see settings.TESTING) precisely so the rest of the suite is
+    not accidentally throttled by its own accumulated request count with no
+    reset between tests - proving the configuration works therefore means
+    re-enabling one rate, at a small enough number to hit within one test,
+    rather than testing against the real 5/hour.
+
+    That has to happen through patch.dict(), not @override_settings(): DRF's
+    ScopedRateThrottle reads api_settings.DEFAULT_THROTTLE_RATES exactly
+    once, when rest_framework.throttling is first imported, and keeps the
+    result as a plain class attribute - override_settings swaps in a new
+    REST_FRAMEWORK dict that nothing goes back to look at again. What
+    THROTTLE_RATES holds is the *same* dict object as
+    settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'], though - Python
+    attribute lookups don't copy - so mutating it in place, which
+    patch.dict() does and reverts, is visible immediately."""
+
+    def setUp(self):
+        super().setUp()
+        # A throttle's request history lives in Django's cache, the same as
+        # the login lockout above - TestCase's transaction rollback never
+        # touches it, so without this, whichever test in this class happens
+        # to run first would leave its request count sitting in the 'auth_email'
+        # bucket for the next one to unfairly inherit.
+        cache.clear()
+
+    def with_rate(self, rate):
+        return patch.dict(
+            ScopedRateThrottle.THROTTLE_RATES, {'auth_email': rate},
+        )
+
+    def test_the_third_request_in_the_window_is_throttled(self):
+        with self.with_rate('2/min'):
+            first = self.register(username='newcomer-a', email='a@example.com')
+            second = self.register(username='newcomer-b', email='b@example.com')
+            third = self.register(username='newcomer-c', email='c@example.com')
+
+        self.assertEqual(first.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(second.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(third.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_the_scope_is_shared_with_resend_and_password_reset(self):
+        """One 'auth_email' bucket, not three separate ones - a caller who
+        exhausts it on /register/ cannot sidestep the limit by switching to
+        /resend-otp/ or /password-reset/request/."""
+        User.objects.create_user(
+            username='cook', email='cook@example.com', password=PASSWORD,
+        )
+
+        with self.with_rate('1/min'):
+            self.register(email='a@example.com')
+            response = self.client.post(
+                self.reset_request_url, {'email': 'cook@example.com'},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
