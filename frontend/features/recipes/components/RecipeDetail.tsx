@@ -1,14 +1,15 @@
 "use client";
 
 /* The public recipe page: RecipePreview's rendering, plus the things a
- * finished recipe needs that a preview does not - a rating, reviews, nutrition,
- * and a way to save it.
+ * finished recipe needs that a preview does not - a rating, reviews, and a
+ * way to save it.
  *
- * Nutrition is the one thing RecipePreview cannot render for itself: it comes
- * from Edamam, fetched for a real, saved recipe, never for a draft still being
- * written in the builder. It is passed in through RecipePreview's
- * `extraSidebar` slot instead - the same cream sidebar Ingredients and
- * Equipment already sit in, not a section of its own.
+ * Nutrition is deliberately absent, the same reason RecipePreview never grew
+ * a real one: Edamam, then CalorieNinjas/API Ninjas were each tried and
+ * dropped in turn (no usable free tier for either - Edamam's had none at
+ * all, API Ninjas' free plan locks calories and protein behind a paid tier),
+ * so the feature stays deferred rather than shipping a panel that cannot
+ * show the figures people actually look for.
  *
  * Still deliberately not the full page the original ComingSoon stub
  * described - that one also needs User.bio and User.avatar_url for a real
@@ -24,7 +25,6 @@ import {
   ApiError,
   createRating,
   deleteComment,
-  fetchNutrition,
   getMyRating,
   getRecipe,
   getSavedEntry,
@@ -38,7 +38,6 @@ import {
   updateRating,
   type CommentRow,
   type IngredientRow,
-  type NutritionInfoRow,
   type RatingRow,
   type RecipeRow,
   type SavedRow,
@@ -86,60 +85,6 @@ function Stars({
   );
 }
 
-/** A decimal string from NutritionInfoRow, rounded for display - "500.00"
- * reads as a lab result; "500" reads as a fact. Null (never fetched, or
- * fetched and Edamam had nothing usable) renders the same as a bad number:
- * a dash, not a fabricated zero. */
-function macro(value: string | null): string {
-  const num = value == null ? NaN : Number(value);
-  return Number.isNaN(num) ? "-" : String(Math.round(num));
-}
-
-function NutritionRow({ label, value, unit }: { label: string; value: string | null; unit: string }) {
-  return (
-    <li className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-ink">{label}</span>
-      <span className="font-semibold text-ink">
-        {value != null ? `${macro(value)} ${unit}` : "-"}
-      </span>
-    </li>
-  );
-}
-
-/** The sidebar card RecipePreview's `extraSidebar` slot renders, next to
- * Ingredients and Equipment - matches their own card styling rather than
- * inventing a fourth look for one more panel in the same column. */
-function NutritionCard({
-  state,
-  nutrition,
-}: {
-  state: "loading" | "ready" | "unavailable";
-  nutrition: NutritionInfoRow | null;
-}) {
-  return (
-    <div className="rounded-2xl bg-panel p-6">
-      <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
-        Nutritional value
-      </h2>
-
-      {state === "loading" && <p className="mt-3 text-sm text-muted">Looking this up...</p>}
-
-      {state === "unavailable" && (
-        <p className="mt-3 text-sm text-muted">Not available right now.</p>
-      )}
-
-      {state === "ready" && (
-        <ul className="mt-4 flex flex-col gap-2">
-          <NutritionRow label="Calories" value={nutrition?.calories ?? null} unit="kcal" />
-          <NutritionRow label="Protein" value={nutrition?.protein ?? null} unit="g" />
-          <NutritionRow label="Carbs" value={nutrition?.carbs ?? null} unit="g" />
-          <NutritionRow label="Fat" value={nutrition?.fat ?? null} unit="g" />
-        </ul>
-      )}
-    </div>
-  );
-}
-
 export function RecipeDetail({ recipeId }: { recipeId: number }) {
   const { user } = useSession();
   const canAct = !!user && user.role !== "guest";
@@ -160,11 +105,6 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
   const [commentText, setCommentText] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
   const [commentError, setCommentError] = useState("");
-
-  const [nutrition, setNutrition] = useState<NutritionInfoRow | null>(null);
-  const [nutritionState, setNutritionState] = useState<
-    "loading" | "ready" | "unavailable"
-  >("loading");
 
   useEffect(() => {
     let cancelled = false;
@@ -226,32 +166,6 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
       cancelled = true;
     };
   }, [canAct, user, recipeId]);
-
-  // Registered users only, matching the endpoint's own gate - a guest never
-  // sees this section at all (see the render below), so there is nothing to
-  // fetch for one. Populates and caches server-side on first call; every
-  // later view of this recipe answers from that cache instead of asking
-  // Edamam again.
-  useEffect(() => {
-    if (!canAct) return;
-
-    let cancelled = false;
-    (async () => {
-      if (!cancelled) setNutritionState("loading");
-      try {
-        const info = await fetchNutrition(recipeId);
-        if (!cancelled) {
-          setNutrition(info);
-          setNutritionState("ready");
-        }
-      } catch {
-        if (!cancelled) setNutritionState("unavailable");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canAct, recipeId]);
 
   useEffect(() => {
     (async () => {
@@ -385,9 +299,6 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
             preview: row.images[0]?.url ?? null,
           }))}
           author={recipe.user?.username}
-          extraSidebar={
-            canAct && <NutritionCard state={nutritionState} nutrition={nutrition} />
-          }
         />
       </div>
 

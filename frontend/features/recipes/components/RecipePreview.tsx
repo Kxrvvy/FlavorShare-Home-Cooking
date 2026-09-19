@@ -8,10 +8,11 @@
  * the real page rather than a second design nobody else will ever see.
  *
  * It shows only what the builder actually holds. The design also has
- * nutrition and a photo+bio author card, and neither exists as a field yet
- * (nutrition is fetched from Edamam only for a saved, viewed recipe - see
- * `extraSidebar` below - and there is no User.bio/avatar_url); inventing
- * either here would preview something the author cannot actually produce.
+ * nutrition and a photo+bio author card, and neither exists as a real field
+ * yet - nutrition stays deferred (Edamam, then CalorieNinjas/API Ninjas were
+ * each tried and dropped for lacking a free tier that includes calories),
+ * and there is no User.bio/avatar_url; inventing either here would preview
+ * something the author cannot actually produce.
  *
  * Fed from the builder's live state rather than the server, so it reflects what
  * has been typed this second, including a row that has not saved yet.
@@ -53,10 +54,6 @@ type Props = {
   ingredients: PreviewIngredient[];
   steps: PreviewStep[];
   author?: string;
-  /** A slot in the same sidebar as Ingredients/Equipment, after both -
-   * RecipeDetail.tsx uses it for the Nutrition panel, which only exists for
-   * a real, saved recipe and so has no place in a draft's live preview. */
-  extraSidebar?: React.ReactNode;
 };
 
 function Meta({ icon, children }: { icon: string; children: React.ReactNode }) {
@@ -114,7 +111,6 @@ export function RecipePreview({
   ingredients,
   steps,
   author,
-  extraSidebar,
 }: Props) {
   const written = ingredients.filter((row) => row.name.trim());
   const instructions = steps.filter((row) => row.text.trim());
@@ -232,8 +228,6 @@ export function RecipePreview({
               </ul>
             </div>
           )}
-
-          {extraSidebar}
         </aside>
       </div>
 

@@ -96,7 +96,8 @@ role, see User Roles below*:
 8. **Admin Dashboard & Reporting** — totals, pending moderation, most
    rated/saved recipes, recent activity, monthly activity chart
 9. **Nutrition Information** — auto-fetched nutrition facts per recipe
-   via Edamam's Recipe Analysis API, fetched lazily on first view and cached
+   via an external nutrition API (deferred — three providers tried and
+   rejected so far; see Status / Open Items)
 10. **Email Notifications** — new comment/rating alerts, meal plan
     reminders via **Brevo**
 
@@ -113,7 +114,7 @@ role, see User Roles below*:
   ingredients, ratings, comments, saved recipes, meal plans), organized
   into connected tables (proper PK/FK relationships).
 - **External Integrations**
-  - Nutrition API — Edamam Recipe Analysis calculates calories/macros per recipe
+  - Nutrition API — calculates calories/macros per recipe (not yet chosen/integrated)
   - Brevo — sends email notifications
 - **Image Handling** — Cloudinary stores and resizes uploaded photos.
 - **Security Layer** — hashed passwords, role-based access control,
@@ -127,8 +128,7 @@ role, see User Roles below*:
 - Personal Recipe Collection → `SavedRecipe` join table (User ↔ Recipe)
 - Ratings & Reviews → own tables, linked to both User and Recipe
 - Meal Plan Generator → pulls from a user's saved/published recipes
-- Nutrition Info → fetched from Edamam the first time a recipe is viewed by a
-  signed-in user, then cached (`meal_plans/nutrition.py`, `NutritionInfoViewSet.fetch`)
+- Nutrition Info → fetched from an external API when a recipe is created/viewed (pending)
 - Email Notifications → triggered by events (new comment, new rating), sent via Brevo
 - Admin Dashboard & Moderation → Admin-only; pulls stats directly from the database
 
@@ -234,7 +234,7 @@ correct and complete as of the last review.
 - **Auth:** JWT (`djangorestframework-simplejwt`)
 - **Image Storage:** Cloudinary
 - **Email Service:** Brevo (`brevo-python`; was Resend — see below)
-- **Nutrition API:** Edamam Recipe Analysis (`meal_plans/nutrition.py`)
+- **Nutrition API:** not yet chosen (deferred)
 - **Hosting:** Vercel (frontend) + **Render** (backend, free tier)
 
 ### Hosting decision notes
@@ -298,7 +298,7 @@ correct and complete as of the last review.
 | Auth & security (hashing, RBAC, input validation, SQLi/XSS protection, sessions) | Django defaults + DRF |
 | Dashboard & reporting | Admin Dashboard feature |
 | Search, filter, sort, pagination | `django-filter` + DRF pagination |
-| External API integration | Cloudinary (images), Brevo (email), and Edamam (nutrition) all integrated |
+| External API integration | Cloudinary (images) and Brevo (email) both integrated; nutrition API deferred |
 
 **Resolved:** instructor confirmed Django counts as an approved
 server-side technology (rubric names PHP only as the default example, not
@@ -437,17 +437,6 @@ business logic beyond "call the API and render the result" stays out of
 - Auth: JWT
 - Image storage: Cloudinary
 - Email service: Brevo (switched from Resend)
-- Nutrition API: Edamam Recipe Analysis — chosen over Spoonacular/USDA
-  FoodData Central/CalorieNinjas because it takes a title plus plain-English
-  ingredient lines (what `RecipeIngredient`'s free-typed name+quantity+unit
-  already is) and returns whole-recipe macros in one call; the others all
-  need each ingredient resolved to a specific food id first. Built:
-  `meal_plans/nutrition.py` (the client) and
-  `NutritionInfoViewSet.fetch` (`meal_plans/views.py`) populate `NutritionInfo`
-  lazily, the first time a signed-in user views a recipe, and cache it rather
-  than re-asking Edamam's rate-limited free tier on every view. `EDAMAM_APP_ID`
-  / `EDAMAM_APP_KEY` are blank by default — see README.md for getting a free
-  pair.
 - Hosting: Vercel (frontend) + Render (backend)
 - Full ERD (15 tables) — built and reviewed
 - 5-app Django structure — built and reviewed
@@ -478,6 +467,27 @@ business logic beyond "call the API and render the result" stays out of
   `dashboard/models.py`, `dashboard/signals.py` and `dashboard/views.py`.
 
 **Not yet decided / not yet built:**
+- **Nutrition API provider** — three tried, all rejected, worth reading
+  before attempting a fourth. Edamam's Recipe/Nutrition Analysis API has no
+  free tier at all (verified directly against developer.edamam.com —
+  $29/month minimum); only its unrelated Meal Planner API is free, and that
+  recommends recipes from Edamam's own catalogue rather than analysing
+  ingredients a caller supplies. CalorieNinjas was next - a natural-language
+  endpoint that takes several ingredients in one line and returns
+  quantity-aware nutrition per item, the best shape for this project's
+  free-typed `RecipeIngredient` rows - but was itself being wound down into
+  API Ninjas (same API contract, different domain) by the time it was
+  tried. API Ninjas' free plan (3,000 requests/month, no card) looked like
+  a fit until testing it live: `calories` and `protein_g` both come back as
+  the literal string `"Only available for premium subscribers."` on the
+  free tier, not numbers - only fat and carbs are actually free. The full
+  API Ninjas integration was built and verified working end to end against
+  a real key before this was found - removed afterward rather than shipped
+  with two of its four headline numbers permanently missing. USDA FoodData
+  Central (genuinely free, 1,000 req/hour, no card) remains untried and is
+  the next candidate - the tradeoff is that it has no natural-language
+  ingredient parsing, so each ingredient would need matching to a specific
+  food entry and its quantity converted to grams by hand.
 - **`backend/flavorshare.sql`'s `CREATE TABLE` script — a teammate's own
   in-progress file, not a task waiting on this assistant.** It remains a
   reference alongside Django's migrations, not what the live database runs

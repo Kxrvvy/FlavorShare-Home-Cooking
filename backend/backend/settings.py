@@ -238,23 +238,6 @@ BREVO_FROM_EMAIL = env('BREVO_FROM_EMAIL', default='')
 # Swap in a registered key here if the free one starts throttling.
 THEMEALDB_API_KEY = env('THEMEALDB_API_KEY', default='1')
 
-# Edamam Recipe Analysis
-# https://developer.edamam.com/edamam-nutrition-api
-#
-# Feature 9 - powers meal_plans/nutrition.py, which turns a recipe's
-# RecipeIngredient rows into the plain-English ingredient lines this API
-# expects and asks it for calories/protein/carbs/fat in one call.
-#
-# No free default like THEMEALDB_API_KEY's '1': Edamam has no published test
-# key, only a per-account app_id/app_key pair from their own free signup.
-# Blank by default so a fresh clone still starts and the test suite still
-# runs - the suite mocks the HTTP call throughout and never needs real
-# credentials. meal_plans/nutrition.py raises NutritionNotConfigured when
-# either is missing, which the view turns into a 503 rather than a request
-# Edamam was never going to answer. README.md explains how to get both.
-EDAMAM_APP_ID = env('EDAMAM_APP_ID', default='')
-EDAMAM_APP_KEY = env('EDAMAM_APP_KEY', default='')
-
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
