@@ -10,10 +10,25 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import sys
 from datetime import timedelta
 from pathlib import Path
 
 import environ
+
+# True under `manage.py test` (sys.argv[1] == 'test') or pytest (which
+# imports itself into sys.modules before Django's settings are ever read).
+# Used below to turn off DRF throttling for the test run only - the rates
+# are real limits meant to bound an hour or a day of live traffic, and every
+# throttle class shares one cache bucket per client with no reset between
+# test methods, so the full suite - hundreds of requests from the test
+# client's one fixed IP - would start tripping them by sheer accumulated
+# count, not because anything under test is actually being abusive.
+# accounts/tests.py exercises the real throttle behaviour anyway, via
+# @override_settings(REST_FRAMEWORK=...) scoped to just those tests - DRF's
+# APISettings listens for setting_changed, so that override is honoured even
+# though TESTING itself is fixed at import time and cannot be un-set that way.
+TESTING = len(sys.argv) > 1 and sys.argv[1] == 'test' or 'pytest' in sys.modules
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -262,6 +277,39 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+
+    # Rate limiting. 'anon'/'user' are the project-wide baseline every view
+    # gets unless it declares its own throttle_classes; 'auth_email' and
+    # 'otp_verify' belong to the five accounts views that do
+    # (accounts/views.py carries the reasoning for each). Generous enough
+    # that normal use never notices: a signed-in session polling a few
+    # endpoints in parallel is nowhere near 1000/hour, and a real person
+    # resending a missed code twice is nowhere near 5/hour - these numbers
+    # are sized against scripted abuse, not against anyone actually using
+    # the app.
+    #
+    # Every rate is None during the test run instead - see TESTING's own
+    # comment above for why - rather than just emptying DEFAULT_THROTTLE_CLASSES.
+    # A view with its own throttle_classes (the accounts five) never
+    # consults that default at all, so disabling it there would do nothing
+    # for exactly the views this project actually throttles; a None rate
+    # makes SimpleRateThrottle.allow_request() return True unconditionally
+    # for every throttle class, reached through either list.
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': None if TESTING else '100/hour',
+        'user': None if TESTING else '1000/hour',
+        # Register / resend-otp / password-reset-request: caps how often
+        # this server will ask Brevo to send mail from one IP, so scripted
+        # signups cannot spend the 300-a-day free quota real users need.
+        'auth_email': None if TESTING else '5/hour',
+        # Verify-email / password-reset-confirm: a code is six digits, one
+        # in a million - safe from guessing only if guessing is this slow.
+        'otp_verify': None if TESTING else '10/hour',
+    },
 }
 
 

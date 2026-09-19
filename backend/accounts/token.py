@@ -1,0 +1,114 @@
+"""Login, with a lockout: /api/token/ replaces SimpleJWT's stock view with
+this module's, everything else about issuing a token is unchanged.
+
+Three wrong passwords for one username locks that username out for fifteen
+minutes, tracked in Django's cache rather than a new column - no migration,
+and it self-expires (the cache entry's own timeout is the lockout, not
+something a cron job has to clear).
+
+Keyed on the submitted username, not the caller's IP. That is a deliberate
+trade, not an oversight: it stops credential-stuffing against one account
+from any number of source IPs, which is the more common real attack, at the
+cost of letting someone lock a legitimate user out for fifteen minutes by
+typing their username with a wrong password three times, without needing to
+know anything else about them. Accepted at this project's scale; pairing it
+with an IP-based throttle would close that gap and is depth-pass work - see
+CLAUDE.md.
+
+The lockout message reaches the frontend for free: DRF's exception handler
+serialises Throttled as {"detail": "..."}, and the login page already reads
+`error.response.data.detail` for every other login failure - see
+app/login/page.tsx. No frontend change was needed for this.
+"""
+
+import time
+
+from django.core.cache import cache
+from rest_framework.exceptions import Throttled
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+MAX_LOGIN_ATTEMPTS = 3
+LOCKOUT_SECONDS = 15 * 60
+
+
+def _attempts_key(username):
+    return f'login_failures:{username}'
+
+
+def _lockout_key(username):
+    return f'login_lockout:{username}'
+
+
+class LockoutTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """TokenObtainPairSerializer, with attempts counted before credentials
+    are ever checked and cleared the moment they succeed."""
+
+    def validate(self, attrs):
+        username = attrs.get(self.username_field) or ''
+
+        unlocks_at = cache.get(_lockout_key(username)) if username else None
+        if unlocks_at:
+            raise Throttled(
+                wait=max(0, int(unlocks_at - time.time())),
+                detail=(
+                    'Too many failed login attempts. '
+                    'Try again after 15 minutes.'
+                ),
+            )
+
+        try:
+            data = super().validate(attrs)
+        except Exception as exc:
+            # The failure that reaches MAX_LOGIN_ATTEMPTS announces the
+            # lockout immediately, in its own response, rather than
+            # answering normally and making the caller find out only on a
+            # fourth try - "3 attempts, then a 15-minute timeout" means the
+            # third one is the one that hears about it.
+            if username and self._register_failure(username):
+                raise Throttled(
+                    wait=LOCKOUT_SECONDS,
+                    detail=(
+                        'Too many failed login attempts. '
+                        'Try again after 15 minutes.'
+                    ),
+                ) from exc
+            raise
+
+        # A correct login forgives whatever partial count came before it -
+        # this is a lockout on repeated wrong guesses, not a running tally
+        # against the account.
+        cache.delete(_attempts_key(username))
+        cache.delete(_lockout_key(username))
+        return data
+
+    def _register_failure(self, username):
+        """Counts one failed attempt. Returns True exactly once per lockout -
+        on the attempt that just reached the limit - so the caller can turn
+        that one response into the lockout message instead of the usual
+        "wrong credentials" one."""
+        key = _attempts_key(username)
+        # Django's cache has no atomic increment-with-default across every
+        # backend (LocMemCache included), so this reads then writes rather
+        # than calling cache.incr(), which raises ValueError on a missing
+        # key instead of starting it at zero.
+        attempts = (cache.get(key) or 0) + 1
+
+        if attempts >= MAX_LOGIN_ATTEMPTS:
+            cache.set(
+                _lockout_key(username),
+                time.time() + LOCKOUT_SECONDS,
+                timeout=LOCKOUT_SECONDS,
+            )
+            cache.delete(key)
+            return True
+
+        cache.set(key, attempts, timeout=LOCKOUT_SECONDS)
+        return False
+
+
+class LockoutTokenObtainPairView(TokenObtainPairView):
+    """The view backend/urls.py mounts at /api/token/ instead of SimpleJWT's
+    own - same endpoint, same response shape, this serializer's lockout."""
+
+    serializer_class = LockoutTokenObtainPairSerializer

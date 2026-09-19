@@ -18,6 +18,18 @@ Email failures become HTTP status codes here and nowhere else.
 accounts/emails.py raises exceptions rather than returning responses, so that
 the same functions can be called from a management command later; translating
 them is this layer's job.
+
+Five of these views carry their own ScopedRateThrottle instead of the
+project-wide default (settings.REST_FRAMEWORK's DEFAULT_THROTTLE_CLASSES,
+which these override rather than add to). Two different reasons, two scopes:
+'auth_email' (RegisterView, ResendOTPView, PasswordResetRequestView) protects
+Brevo's free-tier daily send quota from being spent by scripted signups
+rather than real ones; 'otp_verify' (VerifyEmailView,
+PasswordResetConfirmView) makes brute-forcing a six-digit code
+computationally pointless - a million-combination code is only safe from
+guessing if guessing is this slow. Rates live in settings.py next to the
+general ones, and TESTING there is why the whole suite runs without hitting
+either - see that comment before assuming a rate here is untested.
 """
 
 from django.db import transaction
@@ -25,6 +37,7 @@ from rest_framework import generics, mixins, status, viewsets
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
@@ -114,6 +127,8 @@ class RegisterView(generics.CreateAPIView): # Create = POST
 
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth_email'
 
     def create(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -151,6 +166,8 @@ class VerifyEmailView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'otp_verify'
 
     def post(self, request):
         serializer = VerifyEmailSerializer(data=request.data)
@@ -184,6 +201,8 @@ class ResendOTPView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth_email'
 
     def post(self, request):
         serializer = ResendOTPSerializer(data=request.data)
@@ -215,6 +234,8 @@ class PasswordResetRequestView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth_email'
 
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
@@ -251,6 +272,8 @@ class PasswordResetConfirmView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'otp_verify'
 
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
