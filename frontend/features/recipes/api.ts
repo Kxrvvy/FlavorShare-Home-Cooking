@@ -558,33 +558,6 @@ export async function unsaveRecipe(savedRecipeId: number) {
   return request<void>(`/social/saved/${savedRecipeId}/`, { method: "DELETE" });
 }
 
-/* ------------------------------------------------------------ nutrition */
-
-/** Every macro is a decimal string or null - DRF's DecimalField serializes
- * that way by default, and null means either "never looked up" or "looked
- * up and Edamam had nothing usable", which fetchNutrition's caller cannot
- * tell apart from the response alone (nor needs to - both render the same
- * "not available" state). */
-export interface NutritionInfoRow {
-  nutrition_info_id: number;
-  recipe: number;
-  calories: string | null;
-  protein: string | null;
-  carbs: string | null;
-  fat: string | null;
-  fetched_at: string;
-}
-
-/** Populates and returns this recipe's macros, or returns the already-cached
- * row - meal_plans.views.NutritionInfoViewSet.fetch decides which. Registered
- * users only; a guest's call 401s the same as any other request here. */
-export async function fetchNutrition(recipeId: number) {
-  return request<NutritionInfoRow>("/meal-plans/nutrition/fetch/", {
-    method: "POST",
-    body: JSON.stringify({ recipe: recipeId }),
-  });
-}
-
 /* -------------------------------------------------------------- reports */
 
 export type ReportReason = "spam" | "inappropriate" | "misinformation" | "other";

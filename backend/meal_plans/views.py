@@ -13,11 +13,13 @@ through meal_plan__user. It also scopes through visible_recipes, because a
 recipe that has since been unpublished should drop out of the schedule the same
 way it drops out of a saved-recipe collection.
 
-Nutrition is registered-only throughout - CLAUDE.md puts "view nutrition info
-on recipes" under Registered Users, not Guests. The viewset itself stays
-read-only; the one write path is NutritionInfoViewSet.fetch, a dedicated
-action rather than a create/update route, because a client cannot supply
-macros of its own - only ask this server to go get them from Edamam.
+Nutrition is read-only and registered-only. CLAUDE.md puts "view nutrition
+info on recipes" under Registered Users, not Guests, and nothing writes the
+table yet - the provider is still unchosen. Edamam, then CalorieNinjas/API
+Ninjas were each tried and dropped in turn (no usable free tier for either -
+Edamam's had none at all, API Ninjas' free plan locks calories and protein
+behind a paid tier), so this stays deferred rather than shipping a nutrition
+panel that cannot show the two figures people actually look for.
 """
 
 from datetime import timedelta
@@ -26,7 +28,7 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from accounts.permissions import IsRegisteredUser
@@ -36,7 +38,6 @@ from social.models import SavedRecipe
 from social.views import require_visible_recipe
 
 from .models import MealPlan, MealPlanEntry, NutritionInfo
-from .nutrition import NutritionLookupFailed, NutritionNotConfigured, fetch_nutrition
 from .serializers import (
     MealPlanDetailSerializer,
     MealPlanEntrySerializer,
@@ -303,38 +304,18 @@ class MealPlanEntryViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
-class NutritionUnavailable(APIException):
-    """503 - this server cannot look up nutrition at all.
-
-    A deployment problem, not the caller's. Mirrors the 503
-    accounts.views.EmailUnavailable answers when Brevo's credentials are
-    missing, and the one recipes.views' image upload answers inline for
-    Cloudinary: the feature is not configured here, and retrying the same
-    request will not help.
-    """
-
-    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-
-
-class NutritionLookupError(APIException):
-    """502 - Edamam was reachable and refused the request, could not use it,
-    or never answered at all."""
-
-    status_code = status.HTTP_502_BAD_GATEWAY
-
-
 class NutritionInfoViewSet(viewsets.ReadOnlyModelViewSet):
     """/api/meal-plans/nutrition/ - macros per recipe.
+
+    Read-only because these figures come from an external provider, not from a
+    client - and nothing fetches them yet, so the table is empty until a
+    provider is chosen. Edamam, then CalorieNinjas/API Ninjas were each tried
+    and dropped in turn - see the module docstring - so this stays the
+    original deferred shape rather than a working integration.
 
     IsRegisteredUser rather than one of the *OrReadOnly classes: CLAUDE.md
     lists "view nutrition info on recipes" as a Registered User permission, so
     a guest does not get it even on a published recipe.
-
-    list/retrieve are genuinely read-only - these figures come from Edamam,
-    never a client payload - but the collection is not populated eagerly for
-    every recipe on creation. Edamam's free tier is rate-limited and most
-    recipes are never opened, so `fetch` below populates one row lazily, the
-    first time anyone actually asks to see it.
     """
 
     serializer_class = NutritionInfoSerializer
@@ -348,44 +329,3 @@ class NutritionInfoViewSet(viewsets.ReadOnlyModelViewSet):
         return NutritionInfo.objects.filter(
             recipe__in=visible_recipes(self.request.user),
         ).select_related('recipe')
-
-    @action(detail=False, methods=['post'])
-    def fetch(self, request):
-        """POST {"recipe": <id>} - the macros for one recipe, fetching them
-        from Edamam first if nobody has asked for this recipe before.
-
-        Cached once fetched and never refreshed automatically: a recipe's
-        ingredient list rarely changes after publishing, and re-asking Edamam
-        on every view would spend a rate-limited free quota for the same
-        answer it already gave. A `recipe` whose lookup previously failed
-        (the row exists but every macro is still null) is retried rather than
-        left stuck - `created or info.calories is None` covers both "never
-        tried" and "tried and failed" with the same check.
-        """
-        recipe_id = request.data.get('recipe')
-        if not recipe_id:
-            raise ValidationError({'recipe': 'Provide a recipe id.'})
-
-        try:
-            recipe = visible_recipes(request.user).get(pk=recipe_id)
-        except (Recipe.DoesNotExist, ValueError):
-            # ValueError too: a non-numeric id is exactly as unfindable as a
-            # real one that does not exist, and answering the two the same
-            # way is what keeps this a 400 rather than a 500 on a typo.
-            raise ValidationError({'recipe': 'That recipe does not exist.'})
-
-        info, created = NutritionInfo.objects.get_or_create(recipe=recipe)
-
-        if created or info.calories is None:
-            try:
-                macros = fetch_nutrition(recipe)
-            except NutritionNotConfigured as exc:
-                raise NutritionUnavailable(str(exc)) from exc
-            except NutritionLookupFailed as exc:
-                raise NutritionLookupError(str(exc)) from exc
-
-            for field, value in macros.items():
-                setattr(info, field, value)
-            info.save()
-
-        return Response(self.get_serializer(info).data)

@@ -9,10 +9,11 @@ export const metadata: Metadata = {
 };
 
 /* What the builder collects, rendered through the same RecipePreview it uses,
- * plus Ratings & Reviews, Nutrition, and a Save button. Still not the full
- * design - a real author card needs User.bio and User.avatar_url, which do
- * not exist yet - but everything else the original stub deferred
- * (Step.title, Recipe.equipment, Recipe.body) is real now.
+ * plus Ratings & Reviews and a Save button. Still not the full design - a
+ * real author card needs User.bio and User.avatar_url, which do not exist
+ * yet, and Nutrition stays deferred (no provider found yet with a free tier
+ * that actually includes calories) - but everything else the original stub
+ * deferred (Step.title, Recipe.equipment, Recipe.body) is real now.
  *
  * No sign-in gate: guests can read a published recipe, same as the homepage.
  * RecipeDetail hides the write actions itself for anyone who is not signed
