@@ -452,6 +452,87 @@ class LoginLockoutTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
+class SingleSessionTests(APITestCase):
+    """LockoutTokenObtainPairSerializer._end_other_sessions - a second login
+    ends every session opened before it."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            username='cook',
+            email='cook@example.com',
+            password='the-real-password',
+        )
+        cls.other_user = User.objects.create_user(
+            username='baker',
+            email='baker@example.com',
+            password='another-real-password',
+        )
+
+    def setUp(self):
+        cache.clear()
+
+    def login(self, username='cook', password='the-real-password'):
+        return self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': username, 'password': password},
+        )
+
+    def refresh(self, token):
+        return self.client.post(reverse('token_refresh'), {'refresh': token})
+
+    def test_a_second_login_revokes_the_first_sessions_refresh_token(self):
+        first = self.login()
+        self.login()  # device B signs in
+
+        response = self.refresh(first.data['refresh'])
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_the_new_logins_own_refresh_token_still_works(self):
+        """The exclusion has to name the right token - a login that revoked
+        itself would be a much stranger bug than one that revoked nothing."""
+        second = self.login()
+
+        response = self.refresh(second.data['refresh'])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_a_single_login_leaves_nothing_to_revoke(self):
+        """No second session exists yet - this must not touch the only one
+        there is."""
+        only = self.login()
+
+        response = self.refresh(only.data['refresh'])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_three_devices_all_end_at_the_newest_login(self):
+        first = self.login()
+        second = self.login()
+        self.login()  # a third device signs in
+
+        for earlier in (first, second):
+            with self.subTest(refresh=earlier.data['refresh']):
+                self.assertEqual(
+                    self.refresh(earlier.data['refresh']).status_code,
+                    status.HTTP_401_UNAUTHORIZED,
+                )
+
+    def test_another_accounts_session_is_unaffected(self):
+        """Scoped per user - self.user, not every OutstandingToken row."""
+        other = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': 'baker', 'password': 'another-real-password'},
+        )
+
+        self.login()  # cook signs in on a second device
+
+        response = self.refresh(other.data['refresh'])
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
 class LogoutTests(APITestCase):
     """POST /api/accounts/logout/ and the refresh-rotation rules behind it."""
 
