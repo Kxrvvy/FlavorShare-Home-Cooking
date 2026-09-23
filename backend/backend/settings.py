@@ -104,6 +104,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Serves static files directly from gunicorn in production, with no
+    # separate static-file host/service needed. Must sit right after
+    # SecurityMiddleware, per WhiteNoise's own install instructions.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     # CorsMiddleware must sit above CommonMiddleware so CORS headers are
     # attached even to responses CommonMiddleware short-circuits.
@@ -151,6 +155,32 @@ else:
         }
     }
 
+# TiDB Cloud (production) requires an SSL CA certificate to connect over its
+# Public Endpoint; local MySQL and the SQLite fallback above need nothing
+# extra. Absent on every local developer's machine - set only on Render,
+# pointing at wherever its Secret Files feature places the downloaded TiDB
+# Cloud CA cert - so this changes nothing about how local dev already works.
+DB_SSL_CA_PATH = env('DB_SSL_CA_PATH', default=None)
+if DB_SSL_CA_PATH:
+    DATABASES['default']['OPTIONS'] = {'ssl': {'ca': DB_SSL_CA_PATH}}
+
+# --- TEMPORARY DEBUG PRINT -----------------------------------------------
+# Diagnosing "insecure transport" still being rejected on Render even with
+# DB_SSL_CA_PATH set. Render's free tier has no shell access, so this prints
+# to the build/runtime log instead - remove this whole block once the real
+# cause is found; it has no reason to exist once that's settled.
+import os as _debug_os
+print('DEBUG DB_SSL_CA_PATH raw value:', repr(DB_SSL_CA_PATH))
+print(
+    'DEBUG DB_SSL_CA_PATH exists on disk:',
+    _debug_os.path.exists(DB_SSL_CA_PATH) if DB_SSL_CA_PATH else 'N/A (value is falsy)',
+)
+print(
+    'DEBUG DATABASES["default"] (PASSWORD omitted):',
+    {k: v for k, v in DATABASES['default'].items() if k != 'PASSWORD'},
+)
+# --- END TEMPORARY DEBUG PRINT -------------------------------------------
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -190,6 +220,37 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# The modern (Django 4.2+) replacement for STATICFILES_STORAGE. Only
+# 'staticfiles' is overridden - 'default' stays Django's own FileSystemStorage,
+# the same backend it already used before this setting existed, since nothing
+# here has ever relied on it for more than that (recipe/step photos go through
+# Cloudinary via a plain URLField, never Django's file storage layer).
+# CompressedManifestStaticFilesStorage gzips each file and fingerprints its
+# name with a content hash, so a browser can cache static assets forever
+# without serving stale ones after a deploy.
+#
+# Scoped to `not DEBUG`, the same production-only pattern the security
+# hardening block above uses, for a concrete reason rather than just
+# following precedent: the manifest this storage reads from is only written
+# by `collectstatic`, which runs during Render's deploy build - it does not
+# exist locally or in the test suite. Every page that uses Django's own
+# {% static %} tag (the admin, in this project) raised "Missing staticfiles
+# manifest entry" for every local/test run before this was scoped - caught
+# by the accounts/recipes admin tests failing the moment this shipped
+# unscoped.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': (
+            'whitenoise.storage.CompressedManifestStaticFilesStorage'
+            if not DEBUG
+            else 'django.contrib.staticfiles.storage.StaticFilesStorage'
+        ),
+    },
+}
 
 # Uploaded media (local dev; Cloudinary takes over in production)
 MEDIA_URL = 'media/'
