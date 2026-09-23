@@ -164,23 +164,6 @@ DB_SSL_CA_PATH = env('DB_SSL_CA_PATH', default=None)
 if DB_SSL_CA_PATH:
     DATABASES['default']['OPTIONS'] = {'ssl': {'ca': DB_SSL_CA_PATH}}
 
-# --- TEMPORARY DEBUG PRINT -----------------------------------------------
-# Diagnosing "insecure transport" still being rejected on Render even with
-# DB_SSL_CA_PATH set. Render's free tier has no shell access, so this prints
-# to the build/runtime log instead - remove this whole block once the real
-# cause is found; it has no reason to exist once that's settled.
-import os as _debug_os
-print('DEBUG DB_SSL_CA_PATH raw value:', repr(DB_SSL_CA_PATH))
-print(
-    'DEBUG DB_SSL_CA_PATH exists on disk:',
-    _debug_os.path.exists(DB_SSL_CA_PATH) if DB_SSL_CA_PATH else 'N/A (value is falsy)',
-)
-print(
-    'DEBUG DATABASES["default"] (PASSWORD omitted):',
-    {k: v for k, v in DATABASES['default'].items() if k != 'PASSWORD'},
-)
-# --- END TEMPORARY DEBUG PRINT -------------------------------------------
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
