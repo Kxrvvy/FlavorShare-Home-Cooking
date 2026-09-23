@@ -186,7 +186,7 @@ export function AdminUserDetail({ userId }: { userId: number }) {
         )}
       </div>
 
-      <div className="mt-6 grid grid-cols-3 gap-3">
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-rule bg-card p-4 text-center">
           <p className="font-display text-xl font-semibold text-ink">{stats.recipes}</p>
           <p className="text-xs text-muted">Recipes</p>

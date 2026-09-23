@@ -295,11 +295,20 @@ class RecipeListSerializer(serializers.ModelSerializer):
         .filter(), so a prefetch_related('images') on the view's queryset
         makes this free. .filter() would ignore the prefetch and fire one
         query per row in the list.
+
+        Takes the highest image_id among type=FINAL, not the first one
+        encountered: Image carries no ordering and no timestamp, so without
+        this a recipe that ever ends up with more than one final image (the
+        builder's cover-replace flow deletes the old one, but a failed
+        delete leaves it behind - see RecipeBuilder.tsx's chooseCover) would
+        permanently show whichever was uploaded first instead of the most
+        recent, no matter how many times the cover is replaced afterwards.
         """
+        cover = None
         for image in recipe.images.all():
-            if image.type == Image.Type.FINAL:
-                return image.url
-        return None
+            if image.type == Image.Type.FINAL and (cover is None or image.image_id > cover.image_id):
+                cover = image
+        return cover.url if cover else None
 
     def get_tags(self, recipe):
         """The recipe's tag names, for the badges and the category chips.

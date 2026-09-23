@@ -338,69 +338,76 @@ export function AppShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Phone bar: the mark and the hamburger, nothing else - the rest is in
-          * the drawer, as the old mobile header did it. */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-rule bg-canvas px-5 py-3 lg:hidden">
-          <Link href="/" aria-label="FlavorShare home">
-            <Logo />
-          </Link>
+        {/* Phone bar and its drawer share one sticky wrapper, not two separate
+          * ones - the bar alone used to be sticky while the open drawer sat
+          * right below it as a plain block in the page's normal flow, so
+          * scrolling the page while the menu was open carried the nav links
+          * off the top of the screen with it, leaving only the bar behind.
+          * Pinning them together keeps the whole open menu in view no matter
+          * how far the page under it has scrolled. */}
+        <div className="sticky top-0 z-30 lg:hidden">
+          <header className="flex items-center justify-between border-b border-rule bg-canvas px-5 py-3">
+            <Link href="/" aria-label="FlavorShare home">
+              <Logo />
+            </Link>
 
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            aria-expanded={open}
-            aria-controls="app-drawer"
-            aria-label={open ? "Close menu" : "Open menu"}
-            className="grid h-11 w-11 place-items-center rounded-full border border-rule text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-              className="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
+            <button
+              type="button"
+              onClick={() => setOpen((value) => !value)}
+              aria-expanded={open}
+              aria-controls="app-drawer"
+              aria-label={open ? "Close menu" : "Open menu"}
+              className="grid h-11 w-11 place-items-center rounded-full border border-rule text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
             >
-              {open ? (
-                <>
-                  <path d="M6 6l12 12" />
-                  <path d="M18 6L6 18" />
-                </>
-              ) : (
-                <>
-                  <path d="M4 7h16" />
-                  <path d="M4 12h16" />
-                  <path d="M4 17h16" />
-                </>
-              )}
-            </svg>
-          </button>
-        </header>
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
+                {open ? (
+                  <>
+                    <path d="M6 6l12 12" />
+                    <path d="M18 6L6 18" />
+                  </>
+                ) : (
+                  <>
+                    <path d="M4 7h16" />
+                    <path d="M4 12h16" />
+                    <path d="M4 17h16" />
+                  </>
+                )}
+              </svg>
+            </button>
+          </header>
 
-        {open && (
-          <div
-            id="app-drawer"
-            className="border-b border-rule bg-canvas px-5 pb-6 pt-4 shadow-lg lg:hidden"
-          >
-            {!editor && !hideSearch && <SearchField onSubmitted={() => setOpen(false)} />}
+          {open && (
+            <div
+              id="app-drawer"
+              className="max-h-[80vh] overflow-y-auto border-b border-rule bg-canvas px-5 pb-6 pt-4 shadow-lg"
+            >
+              {!editor && !hideSearch && <SearchField onSubmitted={() => setOpen(false)} />}
 
-            <div className="mt-4">
-              <NavLinks onNavigate={() => setOpen(false)} />
-              <Suspense fallback={null}>
-                <CollectionLinks onNavigate={() => setOpen(false)} />
-              </Suspense>
+              <div className="mt-4">
+                <NavLinks onNavigate={() => setOpen(false)} />
+                <Suspense fallback={null}>
+                  <CollectionLinks onNavigate={() => setOpen(false)} />
+                </Suspense>
 
-              <div className="mt-6">
-                <NavLinks onNavigate={() => setOpen(false)} items={[HELP]} />
+                <div className="mt-6">
+                  <NavLinks onNavigate={() => setOpen(false)} items={[HELP]} />
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-rule pt-2">
+                <AccountMenu onNavigate={() => setOpen(false)} />
               </div>
             </div>
-
-            <div className="mt-4 border-t border-rule pt-2">
-              <AccountMenu onNavigate={() => setOpen(false)} />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {!editor && (
           <div

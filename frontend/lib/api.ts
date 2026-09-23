@@ -13,9 +13,26 @@
  * components, and Next only exposes variables with that prefix to the bundle.
  * It is inlined at build time, so a deployed build needs it set before
  * `next build`, not at runtime.
+ *
+ * With no env var set, the fallback used to be a bare "http://127.0.0.1:8000/api"
+ * - correct for this machine, wrong for anyone else. Open `next dev`'s printed
+ * Network URL (http://192.168.x.x:3000) from this same laptop or from a phone
+ * on the same Wi-Fi, and the browser would still ask 127.0.0.1 for data -
+ * itself, not the host serving the page - so every request failed with
+ * nothing in the UI to explain why. In the browser, deriving the host from
+ * `window.location.hostname` instead means the API is asked for at whatever
+ * host actually served the page: localhost stays localhost, and the network
+ * URL now asks that same LAN address on port 8000 - which still needs
+ * `manage.py runserver 0.0.0.0:8000` plus the host's own IP added to
+ * ALLOWED_HOSTS and CORS_ALLOWED_ORIGINS - see README.md. On the server
+ * (SSR/Node has no `window`), the backend is always this same machine, so
+ * that path keeps the 127.0.0.1 fallback unchanged.
  */
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000/api";
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  (typeof window !== "undefined"
+    ? `http://${window.location.hostname}:8000/api`
+    : "http://127.0.0.1:8000/api");
 
 /* Turning an API failure into something a form can show.
  *

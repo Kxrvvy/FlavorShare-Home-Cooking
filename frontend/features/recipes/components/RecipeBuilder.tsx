@@ -15,6 +15,7 @@ import {
   deleteRecipe,
   deleteStep,
   getRecipe,
+  latestImage,
   listIngredients,
   listRecipeTags,
   listSteps,
@@ -214,6 +215,16 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
    * different rows and queueing per row cannot separate them. */
   const nextNumber = useRef(1);
 
+  /** Every other "final" image id this recipe is already carrying, besides
+   * the one coverImageId tracks - normally empty. A cover replace deletes
+   * the row it knows about and then, self-healing, everything left in this
+   * set too: if an earlier delete ever failed silently (still possible -
+   * deleteImage below is still best-effort), the recipe would otherwise
+   * carry an orphaned final image forever, and get_cover_image()/latestImage()
+   * picking "the newest" only hides it - the row stays in the database and
+   * the next photo replace is what actually clears it. */
+  const staleCoverIds = useRef<number[]>([]);
+
   function runExclusive(key: string, fn: () => Promise<void>) {
     const previous = queue.current.get(key) ?? Promise.resolve();
     const next = previous.then(fn, fn).finally(() => {
@@ -279,8 +290,12 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         setTags(
           tagRows.map((row) => ({ name: row.tag.name, rowId: row.recipe_tag_id }))
         );
-        setCoverPreview(recipe.images?.find((i) => i.type === "final")?.url ?? null);
-        setCoverImageId(recipe.images?.find((i) => i.type === "final")?.image_id ?? null);
+        const cover = latestImage(recipe.images, "final");
+        setCoverPreview(cover?.url ?? null);
+        setCoverImageId(cover?.image_id ?? null);
+        staleCoverIds.current = (recipe.images ?? [])
+          .filter((i) => i.type === "final" && i.image_id !== cover?.image_id)
+          .map((i) => i.image_id);
 
         setIngredients(
           ingredientRows.length
@@ -690,6 +705,14 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
   const chooseCover = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
+
+    /* Cleared on every selection, valid or not - without this, choosing the
+     * same file a second time (retrying after an error, say) fires no
+     * change event at all, since the input's value has not changed from the
+     * browser's point of view. Nothing else visibly happens, which looked
+     * exactly like "changing the photo doesn't do anything." */
+    if (coverInput.current) coverInput.current.value = "";
+
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
@@ -709,7 +732,22 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       try {
         const uploaded = await uploadRecipeImage(file);
         const attached = await attachRecipeImage(recipe, uploaded.url);
-        if (coverImageId !== null) await deleteImage(coverImageId).catch(() => {});
+
+        /* Every final image this recipe was already carrying - the one row
+         * state knows about, plus any orphan left behind by an earlier
+         * delete that failed silently (staleCoverIds's own comment explains
+         * why one can exist). Swept together so a single old failure cannot
+         * keep masking the cover forever - see latestImage() in api.ts,
+         * which is what would otherwise keep surfacing the oldest one. Any
+         * id that fails to delete this time is kept for the next attempt
+         * rather than dropped.
+         */
+        const toRemove = [...staleCoverIds.current, ...(coverImageId !== null ? [coverImageId] : [])];
+        const stillThere = await Promise.all(
+          toRemove.map((id) => deleteImage(id).then(() => null).catch(() => id))
+        );
+        staleCoverIds.current = stillThere.filter((id): id is number => id !== null);
+
         setCoverPreview(uploaded.url);
         setCoverImageId(attached.image_id);
       } catch (error) {
