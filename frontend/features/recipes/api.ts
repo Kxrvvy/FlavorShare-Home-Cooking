@@ -279,6 +279,14 @@ export interface RecipeRow {
   /* RecipeDetailSerializer nests these; the list serializer does not. Present
    * on getRecipe, which is the only caller that needs them. */
   images?: ImageRow[];
+  /* Also detail-only, same reasoning as `images` - and, since this is the
+   * same StepSerializer/RecipeIngredientSerializer used by the standalone
+   * /recipes/steps/ and /recipes/recipe-ingredients/ endpoints, the shape
+   * matches StepRow/IngredientRow exactly. RecipeDetail.tsx reads these
+   * directly instead of re-fetching both through those endpoints a second
+   * time. */
+  steps?: StepRow[];
+  recipe_ingredients?: IngredientRow[];
   /* Detail-only, same reasoning as `images` - a card has no use for a
    * recipe's full long-form content. `body` is plain text, one paragraph per
    * blank line; `equipment` is plain text, one item per line - see the

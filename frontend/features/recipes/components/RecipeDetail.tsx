@@ -30,9 +30,6 @@ import {
   getSavedEntry,
   latestImage,
   listComments,
-  listIngredients,
-  listRecipeTags,
-  listSteps,
   postComment,
   saveRecipe,
   unsaveRecipe,
@@ -117,20 +114,19 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
 
     (async () => {
       try {
-        const [recipe, steps, ingredients, tagRows] = await Promise.all([
-          getRecipe(recipeId),
-          listSteps(recipeId),
-          listIngredients(recipeId),
-          listRecipeTags(recipeId),
-        ]);
+        const recipe = await getRecipe(recipeId);
         if (cancelled) return;
         setState({
           status: "ready",
           data: {
             recipe,
-            steps,
-            ingredients,
-            tags: tagRows.map((row) => tagLabel(row.tag.name)),
+            // RecipeDetailSerializer already nests these - steps, ingredients
+            // and tags used to be fetched again through three separate
+            // endpoints that duplicated data this one response already had,
+            // costing three redundant round trips on every single load.
+            steps: [...(recipe.steps ?? [])].sort((a, b) => a.step_number - b.step_number),
+            ingredients: recipe.recipe_ingredients ?? [],
+            tags: (recipe.tags ?? []).map(tagLabel),
           },
         });
       } catch (err) {
