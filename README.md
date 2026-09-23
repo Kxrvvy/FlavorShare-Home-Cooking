@@ -95,6 +95,7 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | Variable | Required | Example | What it does |
 |---|---|---|---|
 | `DATABASE_URL` | **yes** | `mysql://flavorshare:your-password@127.0.0.1:3306/flavorshare_db` | Points Django at MySQL. Omit it and Django silently falls back to a local SQLite file — the usual reason your tables look empty. |
+| `DB_SSL_CA_PATH` | production only | `/etc/secrets/tidb-ca.pem` | Path to a CA certificate, required to connect to **TiDB Cloud's Public Endpoint** in production (Render). Leave it unset locally — local MySQL and SQLite need no certificate, and this variable being absent is what keeps them working exactly as they do today. On Render, point it at wherever the **Secret Files** feature places the CA certificate you download from the TiDB Cloud console. |
 | `SECRET_KEY` | yes | *generate one, see below* | Signs sessions and JWTs. Never share or reuse one. |
 | `DEBUG` | no | `True` | `True` locally, `False` in production. |
 | `ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | Comma-separated. Add your Render hostname once deployed. |
