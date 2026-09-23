@@ -2211,7 +2211,7 @@ class RecipeTagsPayloadTests(BrowseTestCase):
         from social.models import RecipeTag, Tag
 
         # Six recipes at this point; eleven after the loop below. Both fit one
-        # page - PAGE_SIZE is 20 and there is no page_size query parameter - so
+        # page - PAGE_SIZE is 18 and there is no page_size query parameter - so
         # what changes between the two measurements is only the row count.
         with CaptureQueriesContext(connection) as small:
             self.client.get(RECIPES_URL)

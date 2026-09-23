@@ -99,6 +99,20 @@ copy from; `.gitignore` blocks the whole `.env*` family on purpose.
 | `DEBUG` | no | `True` | `True` locally, `False` in production. |
 | `ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | Comma-separated. Add your Render hostname once deployed. |
 | `CORS_ALLOWED_ORIGINS` | no | `http://localhost:3000,http://127.0.0.1:3000` | Origins allowed to call this API. Add the Vercel URL once the frontend ships. |
+
+**Testing from another device on your Wi-Fi (a phone, or this laptop's own
+LAN address instead of `localhost`)?** Both of the above need your machine's
+LAN IP added too, e.g. `ipconfig`/`ifconfig` says `192.168.1.23`:
+
+```ini
+ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.23
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.23:3000
+```
+
+and run the backend bound to every interface, not just loopback - see step 9.
+Without this, `next dev`'s printed "Network" URL loads the page fine (Next
+already binds every interface by default) but every API call from it fails,
+since Django never even hears the request.
 | `CLOUDINARY_CLOUD_NAME` | for uploads | `dxxxxxxxx` | Cloudinary account to upload recipe photos to. |
 | `CLOUDINARY_API_KEY` | for uploads | `123456789012345` | Public half of the Cloudinary credentials. |
 | `CLOUDINARY_API_SECRET` | for uploads | *from your dashboard* | Secret half. Server-side only — never put this in the frontend. |
@@ -184,8 +198,13 @@ Create `frontend/.env.local` the same way — by hand, and it is gitignored too.
 |---|---|---|---|
 | `NEXT_PUBLIC_API_BASE_URL` | no locally, **yes when deployed** | `http://127.0.0.1:8000/api` | Where the browser sends every API call: login, signup, and everything under recipes. Note the value **includes `/api`** — callers pass `/token/` and `/recipes/`, not `/api/token/`. |
 
-Locally you can skip it: `lib/api.ts` falls back to
-`http://127.0.0.1:8000/api`, which is where `manage.py runserver` listens.
+Locally you can skip it: in the browser, `lib/api.ts` falls back to asking
+whatever host actually served the page, on port 8000 - `localhost:3000`
+asks `localhost:8000`, and `next dev`'s Network URL asks that same LAN
+address, which is what makes testing from a phone work without setting
+anything here. (Server-side rendering has no such host to read, so it
+always falls back to `127.0.0.1:8000/api`, which is correct since Next's
+server and Django always run on the same machine.)
 
 **Deploying is where this bites.** Next inlines every `NEXT_PUBLIC_*` variable
 into the JavaScript bundle at **build** time, not at runtime. So on Vercel it
@@ -251,6 +270,15 @@ python backend/manage.py runserver
 
 The API is at http://127.0.0.1:8000/ and the Django admin at
 http://127.0.0.1:8000/admin/.
+
+Testing from another device on the same Wi-Fi (see the `ALLOWED_HOSTS`/
+`CORS_ALLOWED_ORIGINS` note in step 5)? The bare command above only binds
+loopback - nothing outside this machine can reach it. Bind every interface
+instead:
+
+```bash
+python backend/manage.py runserver 0.0.0.0:8000
+```
 
 ---
 

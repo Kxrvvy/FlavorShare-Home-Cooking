@@ -242,6 +242,27 @@ export interface ImageRow {
   step: number | null;
 }
 
+/* The most recently attached image of a given type, or null if there is
+ * none. Image carries no ordering and no timestamp, so ".find()" would
+ * return whichever happens to load first - normally the only one there is,
+ * but a recipe that ever ends up with more than one "final" image (a failed
+ * delete during a cover-photo replace, say - see RecipeBuilder.tsx's
+ * chooseCover) would then show the oldest one forever, masking every later
+ * upload. Picking the highest image_id is this file's one place for that
+ * rule, so every caller reading "the cover" agrees on which image that is. */
+export function latestImage(
+  images: ImageRow[] | undefined,
+  type: ImageRow["type"]
+): ImageRow | null {
+  let latest: ImageRow | null = null;
+  for (const image of images ?? []) {
+    if (image.type === type && (latest === null || image.image_id > latest.image_id)) {
+      latest = image;
+    }
+  }
+  return latest;
+}
+
 export interface RecipeRow {
   recipe_id: number;
   /** Nested by both recipe serializers; who wrote it. */

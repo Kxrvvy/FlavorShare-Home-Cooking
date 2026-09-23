@@ -172,96 +172,108 @@ export function RecipePreview({
         </div>
       </div>
 
-      {/* The intro: long-form prose beside the cream sidebar, the layout the
-        * reference design uses above its Instructions section rather than
-        * beside it. An empty `paragraphs` renders no prose but still leaves
-        * the sidebar its usual column - Ingredients always has something to
-        * say, even when it is "Nothing listed yet." */}
-      <div className="mt-10 grid gap-10 lg:grid-cols-[1fr_19rem]">
-        <div className="min-w-0 lg:order-1 flex flex-col gap-4 text-sm leading-relaxed text-slate">
+      {/* Prose, if any, full width above both. */}
+      {paragraphs.length > 0 && (
+        <div className="mt-10 flex flex-col gap-4 text-sm leading-relaxed text-slate">
           {paragraphs.map((paragraph, index) => (
             <p key={index}>{paragraph}</p>
           ))}
         </div>
+      )}
 
-        <aside className="flex flex-col gap-4 lg:order-2">
-          <div className="rounded-2xl bg-panel p-6">
-            <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
-              Ingredients
-            </h2>
-
-            {written.length === 0 ? (
-              <p className="mt-3 text-sm text-muted">Nothing listed yet.</p>
-            ) : (
-              <ul className="mt-4 flex flex-col gap-2.5">
-                {written.map((row) => (
-                  <li key={row.key} className="flex gap-2 text-sm text-ink">
-                    <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-maroon" />
-                    <span>
-                      {[row.quantity.trim(), row.unit.trim()].filter(Boolean).join(" ")}{" "}
-                      {row.name.trim()}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {prepTime.trim() && (
-              <p className="mt-5 border-t border-rule pt-4 text-xs text-muted">
-                Prep takes about {prepTime.trim()}.
-              </p>
-            )}
-          </div>
-
-          {equipmentItems.length > 0 && (
+      {/* Ingredients and Instructions on the same row - a narrow sidebar
+        * beside the numbered steps, both starting at the same top edge,
+        * rather than one stacked above the other. Used to put Ingredients
+        * beside prose instead (or, before that, stacked above Instructions
+        * entirely) - neither actually lined the two up the way a recipe
+        * page normally does. */}
+      <div className="mt-10 grid gap-10 lg:grid-cols-[1fr_19rem]">
+        {/* The outer <aside> is left to the grid's default stretch, so its
+          * box spans the full row height - exactly as tall as Instructions
+          * beside it. The inner wrapper is what actually sticks; pinned to
+          * the outer box, it can only follow the scroll as far as that box
+          * goes, which is to say exactly to the end of Instructions, not
+          * past it. */}
+        <aside className="lg:order-2">
+          <div className="flex flex-col gap-4 lg:sticky lg:top-6">
             <div className="rounded-2xl bg-panel p-6">
               <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
-                Equipment needed
+                Ingredients
               </h2>
-              <ul className="mt-4 flex flex-col gap-2.5">
-                {equipmentItems.map((item, index) => (
-                  <li key={index} className="flex gap-2 text-sm text-ink">
-                    <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-maroon" />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </aside>
-      </div>
 
-      <section className="mt-12">
-        <h2 className="font-display text-2xl font-bold uppercase tracking-tight text-ink">
-          Instructions
-        </h2>
+              {written.length === 0 ? (
+                <p className="mt-3 text-sm text-muted">Nothing listed yet.</p>
+              ) : (
+                <ul className="mt-4 flex flex-col gap-2.5">
+                  {written.map((row) => (
+                    <li key={row.key} className="flex gap-2 text-sm text-ink">
+                      <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-maroon" />
+                      <span>
+                        {[row.quantity.trim(), row.unit.trim()].filter(Boolean).join(" ")}{" "}
+                        {row.name.trim()}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-        {instructions.length === 0 ? (
-          <p className="mt-4 text-sm text-muted">
-            Steps you write will appear here, in order.
-          </p>
-        ) : (
-          <ol className="mt-6 flex flex-col gap-8">
-            {instructions.map((step, index) => (
-              <li key={step.key}>
-                <p className="font-display text-xs font-semibold uppercase tracking-widest text-ember">
-                  {step.title?.trim() || `Step ${index + 1}`}
+              {prepTime.trim() && (
+                <p className="mt-5 border-t border-rule pt-4 text-xs text-muted">
+                  Prep takes about {prepTime.trim()}.
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-slate">{step.text.trim()}</p>
+              )}
+            </div>
 
-                {step.preview && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={step.preview}
-                    alt=""
-                    className="mt-4 aspect-[4/3] w-full max-w-sm rounded-2xl border border-rule object-cover"
-                  />
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+            {equipmentItems.length > 0 && (
+              <div className="rounded-2xl bg-panel p-6">
+                <h2 className="font-display text-xs font-semibold uppercase tracking-widest text-maroon">
+                  Equipment needed
+                </h2>
+                <ul className="mt-4 flex flex-col gap-2.5">
+                  {equipmentItems.map((item, index) => (
+                    <li key={index} className="flex gap-2 text-sm text-ink">
+                      <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-maroon" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <section className="lg:order-1">
+          <h2 className="font-display text-2xl font-bold uppercase tracking-tight text-ink">
+            Instructions
+          </h2>
+
+          {instructions.length === 0 ? (
+            <p className="mt-4 text-sm text-muted">
+              Steps you write will appear here, in order.
+            </p>
+          ) : (
+            <ol className="mt-6 flex flex-col gap-8">
+              {instructions.map((step, index) => (
+                <li key={step.key}>
+                  <p className="font-display text-xs font-semibold uppercase tracking-widest text-ember">
+                    {step.title?.trim() || `Step ${index + 1}`}
+                  </p>
+                  <p className="mt-2 text-sm leading-relaxed text-slate">{step.text.trim()}</p>
+
+                  {step.preview && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={step.preview}
+                      alt=""
+                      className="mt-4 aspect-[4/3] w-full max-w-sm rounded-2xl border border-rule object-cover"
+                    />
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </div>
 
       {author && (
         <footer className="mt-12 flex items-center gap-3 border-t border-rule pt-6">

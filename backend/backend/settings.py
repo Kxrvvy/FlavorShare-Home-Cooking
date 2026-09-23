@@ -276,7 +276,15 @@ REST_FRAMEWORK = {
         'rest_framework.filters.OrderingFilter',
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
+    # A multiple of both 2 and 3, not a round number for its own sake: the
+    # Explore page's recipe grid is grid-cols-2 on tablet and grid-cols-3 on
+    # desktop (RecipeResults.tsx), and a page size that is not a multiple of
+    # the column count leaves the last row visibly short - a page of 20 in
+    # 3 columns ends 6 full rows then a row of 2, with an empty third column
+    # where a card would go. 18 divides evenly into both layouts, so only
+    # the very last page of a recipe list can ever fall short now, not
+    # every full page along the way.
+    'PAGE_SIZE': 18,
 
     # Rate limiting. 'anon'/'user' are the project-wide baseline every view
     # gets unless it declares its own throttle_classes; 'auth_email' and

@@ -27,7 +27,7 @@ from django.core.management.base import BaseCommand
 
 from recipes.models import Recipe
 from recipes.sources import THEMEALDB
-from social.models import Comment, Rating
+from social.models import Comment, Rating, RecipeTag, Tag
 
 # Five distinct personas rather than one account rating everything - a
 # single reviewer leaving a dozen reviews reads as fake in a way five
@@ -62,6 +62,81 @@ SEED = [
 # Beef Bourguignon, Beef Rendang - both already 5-star above. Exactly two:
 # the homepage's Featured Recipes panel is a fixed 2-up grid on desktop.
 FEATURED_EXTERNAL_IDS = ["52904", "53053"]
+
+# (TheMealDB external_id -> frontend/lib/categories.ts tag labels, lowercased
+# to match Tag.save()'s own normalisation). Hand-picked per dish, the same
+# reasoning import_themealdb.py's docstring gives for never doing this
+# automatically from TheMealDB's own categories: "Vegetarian" is not
+# "Vegan", and a categoriser guessing from a category name alone would
+# mislabel dishes that are vegetarian but not vegan (dairy, eggs) as vegan.
+# "vegan" is applied only to imports actually pulled from TheMealDB's Vegan
+# category - never inferred from an ingredient list here.
+TAGS = {
+    # Beef (dinner-leaning mains; a few quicker stir-fries/wraps read as
+    # lunch or a quick bite too)
+    "53281": ["dinner", "quick bite!"],   # Algerian Kefta (Meatballs)
+    "53334": ["lunch"],                    # Arepa Pabellon
+    "53329": ["lunch"],                    # Arepa pelua
+    "53133": ["dinner"],                   # Asado
+    "53099": ["lunch", "quick bite!"],     # Aussie Burgers
+    "53457": ["dinner"],                   # Barbados Pepperpot
+    "53366": ["dinner", "quick bite!"],    # Beef and Broccoli Stir-Fry
+    "52874": ["dinner"],                   # Beef and Mustard Pie
+    "52878": ["dinner"],                   # Beef and Oyster pie
+    "53071": ["dinner"],                   # Beef Asado
+    "52997": ["lunch", "quick bite!"],     # Beef Banh Mi Bowls
+    "52904": ["dinner"],                   # Beef Bourguignon
+    "52812": ["dinner"],                   # Beef Brisket Pot Roast
+    "53070": ["dinner"],                   # Beef Caldereta
+    "52873": ["dinner"],                   # Beef Dumpling Stew
+    "53317": ["lunch", "quick bite!"],     # Beef Empanadas
+    "52952": ["dinner", "quick bite!"],    # Beef Lo Mein
+    "53421": ["dinner", "quick bite!"],    # Beef Lok Lak
+    "53359": ["dinner"],                   # Beef Mandi
+    "53068": ["dinner"],                   # Beef Mechado
+    "53238": ["dinner"],                   # Beef pho
+    "53469": ["dinner"],                   # Beef pumpkin Stew
+    "53053": ["dinner"],                   # Beef Rendang
+    "52834": ["dinner"],                   # Beef stroganoff
+
+    # Vegan (pulled from TheMealDB's own Vegan category)
+    "53092": ["vegan", "lunch", "quick bite!"],  # Fasoliyyeh Bi Z-Zayt
+    "53150": ["vegan", "quick bite!"],           # Padron peppers
+    "53115": ["vegan", "quick bite!"],           # Red onion pickle
+    "52942": ["vegan", "dinner"],                # Roast fennel & aubergine paella
+    "53250": ["vegan", "lunch", "quick bite!"],  # Vegan banh mi
+
+    # Vegetarian (may carry dairy/eggs - never tagged vegan)
+    "53158": ["lunch", "quick bite!"],     # Air fryer patatas bravas
+    "53288": ["lunch", "quick bite!"],     # Algerian Flafla (Bell Pepper Salad)
+    "53278": ["lunch", "quick bite!"],     # Aubergine & hummus grills
+    "53267": ["lunch"],                    # Aubergine couscous salad
+    "53107": ["lunch", "quick bite!"],     # Avocado dip with new potatoes
+
+    # Dessert
+    "53120": ["dessert"],                  # Aebleskiver
+    "53138": ["dessert"],                  # Alfajores
+    "53111": ["dessert"],                  # Anzac biscuits
+    "53049": ["dessert"],                  # Apam balik
+    "52893": ["dessert"],                  # Apple & Blackberry Crumble
+
+    # Breakfast
+    "53430": ["breakfast"],                # Antiguan Breakfast
+    "53076": ["breakfast", "quick bite!"], # Bread omelette
+    "52965": ["breakfast", "quick bite!"], # Breakfast Potatoes
+    "53379": ["breakfast", "dessert"],     # Dutch poffertjes (mini pancakes)
+    "52895": ["breakfast"],                # English Breakfast
+
+    # Seafood
+    "53483": ["lunch", "quick bite!"],     # Acaraje fritters with shrimp
+    "53495": ["dinner"],                   # Amok Trey (Cambodian Fish Curry)
+    "53147": ["dinner"],                   # Arroz con gambas y calamar
+
+    # Pasta
+    "52839": ["dinner", "quick bite!"],    # Chilli prawn linguine
+    "53064": ["dinner", "quick bite!"],    # Fettuccine Alfredo
+    "52835": ["dinner", "quick bite!"],    # Fettucine alfredo
+}
 
 
 class Command(BaseCommand):
@@ -113,16 +188,32 @@ class Command(BaseCommand):
             source=THEMEALDB, external_id__in=FEATURED_EXTERNAL_IDS,
         ).update(featured=True)
 
+        tagged = 0
+        tag_missing = []
+        for external_id, names in TAGS.items():
+            try:
+                recipe = Recipe.objects.get(source=THEMEALDB, external_id=external_id)
+            except Recipe.DoesNotExist:
+                tag_missing.append(external_id)
+                continue
+
+            for name in names:
+                tag, _ = Tag.objects.get_or_create(name=name)
+                RecipeTag.objects.get_or_create(recipe=recipe, tag=tag)
+            tagged += 1
+
         self.stdout.write(
             self.style.SUCCESS(
-                f'Seeded {seeded} rating(s)/review(s) and featured {featured} recipe(s).'
+                f'Seeded {seeded} rating(s)/review(s), featured {featured} '
+                f'recipe(s), and tagged {tagged} recipe(s).'
             )
         )
-        if missing:
+        if missing or tag_missing:
+            missing_ids = ', '.join(sorted(set(missing) | set(tag_missing)))
             self.stdout.write(
                 self.style.WARNING(
-                    f"{len(missing)} recipe(s) not found and skipped - "
-                    f"re-run import_themealdb with a higher --limit to "
-                    f"cover them: {', '.join(missing)}"
+                    f"Some recipe(s) not found and skipped - re-run "
+                    f"import_themealdb with a higher --limit to cover them: "
+                    f"{missing_ids}"
                 )
             )

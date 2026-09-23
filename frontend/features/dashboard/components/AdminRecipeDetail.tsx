@@ -15,6 +15,7 @@ import { listAllComments } from "@/features/dashboard/api";
 import {
   ApiError,
   getRecipe,
+  latestImage,
   listIngredients,
   listRecipeTags,
   listSteps,
@@ -152,7 +153,7 @@ export function AdminRecipeDetail({ recipeId }: { recipeId: number }) {
   }
 
   const { recipe, steps, ingredients, tags, commentCount } = state.data;
-  const cover = recipe.images?.find((i) => i.type === "final")?.url ?? null;
+  const cover = latestImage(recipe.images, "final")?.url ?? null;
 
   return (
     <div>

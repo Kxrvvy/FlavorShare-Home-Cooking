@@ -28,6 +28,7 @@ import {
   getMyRating,
   getRecipe,
   getSavedEntry,
+  latestImage,
   listComments,
   listIngredients,
   listRecipeTags,
@@ -94,6 +95,11 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
   >({ status: "loading" });
 
   const [myRating, setMyRating] = useState<RatingRow | null>(null);
+  /* What the stars show while you are choosing, separate from myRating (what
+   * is actually saved) - clicking a star used to submit immediately, with no
+   * chance to change your mind before it posted. Seeded from myRating once it
+   * loads, below. */
+  const [selectedScore, setSelectedScore] = useState(0);
   const [ratingBusy, setRatingBusy] = useState(false);
   const [ratingError, setRatingError] = useState("");
 
@@ -159,6 +165,7 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
       ]);
       if (!cancelled) {
         setMyRating(rating);
+        setSelectedScore(rating?.score ?? 0);
         setSavedEntry(saved);
       }
     })();
@@ -177,15 +184,35 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
     })();
   }, [recipeId]);
 
-  async function rate(score: number) {
-    if (ratingBusy) return;
+  /* avg_score and save_count live on the recipe fetched once on page load,
+   * not on myRating/savedEntry - rating or saving without this leaves the
+   * "X.X average"/"saved N times" line showing stale numbers until a full
+   * reload re-fetches the recipe. Re-reading just the recipe (steps,
+   * ingredients and tags do not change from either action) is cheaper than
+   * refetching everything. */
+  async function refreshCounts() {
+    try {
+      const recipe = await getRecipe(recipeId);
+      setState((current) =>
+        current.status === "ready" ? { ...current, data: { ...current.data, recipe } } : current
+      );
+    } catch {
+      // The action itself already succeeded; a stale average is a smaller
+      // problem than surfacing an error for a background refresh.
+    }
+  }
+
+  async function submitRating() {
+    if (ratingBusy || selectedScore === 0) return;
     setRatingBusy(true);
     setRatingError("");
     try {
       const result = myRating
-        ? await updateRating(myRating.rating_id, score)
-        : await createRating(recipeId, score);
+        ? await updateRating(myRating.rating_id, selectedScore)
+        : await createRating(recipeId, selectedScore);
       setMyRating(result);
+      setSelectedScore(result.score);
+      await refreshCounts();
     } catch (err) {
       setRatingError(
         err instanceof ApiError ? err.message : "Could not save your rating."
@@ -206,6 +233,7 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
       } else {
         setSavedEntry(await saveRecipe(recipeId));
       }
+      await refreshCounts();
     } catch (err) {
       setSaveError(
         err instanceof ApiError ? err.message : "Could not update your collection."
@@ -262,7 +290,7 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
 
   const { recipe, steps, ingredients, tags } = state.data;
   const isOwnRecipe = !!user && recipe.user?.user_id === user.user_id;
-  const cover = recipe.images?.find((i) => i.type === "final")?.url ?? null;
+  const cover = latestImage(recipe.images, "final")?.url ?? null;
 
   return (
     <div className="pb-16">
@@ -320,7 +348,15 @@ export function RecipeDetail({ recipeId }: { recipeId: number }) {
             <p className="text-xs font-semibold uppercase tracking-widest text-muted">
               Your rating
             </p>
-            <Stars value={myRating?.score ?? 0} onPick={rate} disabled={ratingBusy} />
+            <Stars value={selectedScore} onPick={setSelectedScore} disabled={ratingBusy} />
+            <button
+              type="button"
+              disabled={ratingBusy || selectedScore === 0 || selectedScore === (myRating?.score ?? 0)}
+              onClick={submitRating}
+              className="rounded-full border border-rule px-4 py-1.5 font-display text-xs font-semibold text-ink transition-colors hover:bg-panel disabled:opacity-40"
+            >
+              {ratingBusy ? "Saving..." : myRating ? "Update rating" : "Submit rating"}
+            </button>
           </div>
         )}
 

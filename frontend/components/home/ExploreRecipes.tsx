@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 import { CarouselArrows } from "@/components/ui/CarouselArrows";
@@ -22,7 +23,9 @@ import type { Recipe } from "@/lib/types";
  *
  * Desktop lays the recipes out as a 3x2 grid. Mobile does not stack that grid:
  * the export shows a single card inside a cream panel with its own arrows, so
- * that is what the small breakpoint renders.
+ * that is what the small breakpoint renders. Either way, an "Explore
+ * recipes" button below always leads to the full catalogue at /recipes -
+ * this section is a teaser, not the only way to browse.
  */
 
 export function ExploreRecipes({ recipes: initialRecipes }: { recipes: Recipe[] }) {
@@ -122,6 +125,15 @@ export function ExploreRecipes({ recipes: initialRecipes }: { recipes: Recipe[] 
           </div>
         </>
       )}
+
+      <div className="mt-10 flex justify-center">
+        <Link
+          href="/recipes"
+          className="rounded-full bg-maroon px-7 py-3 font-display text-xs font-semibold uppercase tracking-widest text-card transition-opacity hover:opacity-90"
+        >
+          Explore more recipes
+        </Link>
+      </div>
     </section>
   );
 }
