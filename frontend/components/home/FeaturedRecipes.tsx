@@ -9,8 +9,8 @@ import type { Recipe } from "@/lib/types";
 /* FEATURED RECIPES - a cream panel holding two cards.
  *
  * Desktop shows both side by side with the arrows top-right of the heading;
- * mobile shows one at a time with the arrows below the heading, left-aligned.
- * Same data, two arrangements, both from the export.
+ * phone and tablet show one at a time with a small, centred pair of arrows
+ * under the card. Same data, two arrangements.
  *
  * Which recipes appear here is an editorial choice, not a popularity contest:
  * these come from recipe.featured, the column being added to the backend so an
@@ -36,18 +36,33 @@ export function FeaturedRecipes({ recipes }: { recipes: Recipe[] }) {
             Featured Recipes
           </h2>
 
-          <CarouselArrows
-            label="featured recipe"
-            onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
-            onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
-            canGoPrevious={index > 0}
-            canGoNext={index < recipes.length - 1}
-          />
+          {/* Desktop only: top-right of the heading, full size, as before. */}
+          <div className="hidden lg:block">
+            <CarouselArrows
+              label="featured recipe"
+              onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
+              onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
+              canGoPrevious={index > 0}
+              canGoNext={index < recipes.length - 1}
+            />
+          </div>
         </div>
 
-        {/* Mobile: one card, chosen by the arrows. */}
+        {/* Phone and tablet: one card, chosen by a smaller pair of arrows
+          * centred beneath it rather than sharing a row with the heading. */}
         <div className="mt-6 lg:hidden">
           <RecipeCard recipe={recipes[index]} size="wide" />
+
+          <div className="mt-4 flex justify-center">
+            <CarouselArrows
+              size="small"
+              label="featured recipe"
+              onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
+              onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
+              canGoPrevious={index > 0}
+              canGoNext={index < recipes.length - 1}
+            />
+          </div>
         </div>
 
         {/* Desktop: both, side by side. */}
