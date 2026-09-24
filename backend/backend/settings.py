@@ -397,3 +397,31 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 CORS_ALLOW_CREDENTIALS = True
+
+
+# Logging - so a 500 in production leaves its traceback somewhere readable.
+#
+# Django's default config sends django.request errors to two places: a console
+# handler that only runs when DEBUG=True, and mail_admins, which only runs when
+# DEBUG=False *and* ADMINS is set. Here that means an unhandled exception in
+# production went nowhere - a host's log showed the bare `POST ... 500` line
+# and no traceback at all. Render (and any host that captures stderr) shows
+# whatever reaches the console, so this routes those errors there.
+#
+# propagate=False because django's own logger would otherwise print the same
+# record a second time whenever DEBUG=True. disable_existing_loggers stays
+# False so every other logger keeps working as before.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}

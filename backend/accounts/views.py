@@ -172,21 +172,29 @@ class VerifyEmailView(APIView):
     def post(self, request):
         serializer = VerifyEmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
 
-        # for_user() issues a fresh pair and, with the blacklist app installed,
-        # registers the refresh token as outstanding - so a later password
-        # change can revoke it like any other.
-        refresh = RefreshToken.for_user(user)
+        # One transaction around everything that follows validation: the
+        # account, the pending row's deletion, and the tokens. Without it the
+        # first two committed before the third ran, so a failure issuing
+        # tokens left an account that existed while the caller was told the
+        # request failed - pending row gone, email and username already
+        # taken, nothing to retry. Now it either all happens or none of it
+        # does, and the PendingSignup survives for a real retry.
+        with transaction.atomic():
+            user = serializer.save()
 
-        return Response(
-            {
+            # for_user() issues a fresh pair and, with the blacklist app
+            # installed, registers the refresh token as outstanding - so a
+            # later password change can revoke it like any other.
+            refresh = RefreshToken.for_user(user)
+
+            payload = {
                 'user': UserSerializer(user).data,
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+            }
+
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 class ResendOTPView(APIView):
