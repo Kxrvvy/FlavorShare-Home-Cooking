@@ -71,8 +71,23 @@ export function RecipeCard({ recipe, size = "default" }: RecipeCardProps) {
          * The two arrangements are both from the export: mobile stacks the meta
          * above a full-width button, desktop sets them side by side. */}
         <div className="mt-auto flex flex-col gap-4 pt-5 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-3">
-          <p className="font-display text-[11px] font-medium tracking-wide text-ink">
-            {meta}
+          {/* Cuisine leads the line and links to Explore filtered by it, so
+           * the card is also the quickest way to see more of the same. The
+           * rest stays one plain string, exactly as formatRecipeMeta builds
+           * it. Six of the fifty imports have no cuisine, so it is optional. */}
+          <p className="flex flex-wrap items-center gap-x-1.5 font-display text-[11px] font-medium tracking-wide text-ink">
+            {recipe.cuisine_type && (
+              <>
+                <Link
+                  href={`/recipes?cuisine_type=${encodeURIComponent(recipe.cuisine_type)}`}
+                  className="uppercase underline decoration-ink/30 underline-offset-2 hover:decoration-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
+                >
+                  {recipe.cuisine_type}
+                </Link>
+                {meta && <span aria-hidden="true">-</span>}
+              </>
+            )}
+            {meta && <span>{meta}</span>}
           </p>
 
           <Link
