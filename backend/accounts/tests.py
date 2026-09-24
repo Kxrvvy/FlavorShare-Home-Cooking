@@ -1457,6 +1457,30 @@ class VerifyEmailTests(SignupFlowTestCase):
 
         self.assertFalse(PendingSignup.objects.exists())
 
+    def test_a_failure_issuing_tokens_undoes_the_whole_verification(self):
+        """Nothing half-happens: no account, and the signup survives a retry.
+
+        Creating the user and deleting the pending row used to commit before
+        the tokens were issued, so a failure in RefreshToken.for_user() - a
+        real one, on a real database, was a 500 on production - left an
+        account that existed while the caller was told it did not, with the
+        pending row gone and the email and username already taken.
+        """
+        with patch(
+            'accounts.views.RefreshToken.for_user',
+            side_effect=RuntimeError('token table unavailable'),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.verify()
+
+        self.assertFalse(User.objects.filter(username='newcomer').exists())
+        self.assertEqual(PendingSignup.objects.count(), 1)
+
+        # And the retry a real person would make actually works.
+        retry = self.verify()
+        self.assertEqual(retry.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.filter(username='newcomer').exists())
+
     def test_a_wrong_code_is_refused(self):
         wrong = '000000' if self.pending.code != '000000' else '111111'
 
