@@ -99,9 +99,7 @@ function NavLinks({
                 onClick={onNavigate}
                 aria-current={current ? "page" : undefined}
                 title={collapsed ? item.label : undefined}
-                className={`flex items-center gap-3 rounded-xl py-2.5 font-display text-sm transition-colors ${
-                  collapsed ? "justify-center px-0" : "px-3"
-                } ${
+                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 font-display text-sm transition-colors ${
                   current
                     ? "bg-panel font-semibold text-maroon"
                     : "font-medium text-slate hover:bg-panel/60 hover:text-ink"
@@ -119,9 +117,19 @@ function NavLinks({
                 >
                   <path d={item.icon} />
                 </svg>
-                {/* The label is kept for screen readers when it is not drawn,
-                  * so a collapsed rail is still navigable without sight. */}
-                <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
+                {/* Always drawn, never sr-only: the rail is overflow-hidden, so
+                  * as it narrows the label is clipped away with it rather than
+                  * vanishing on the first frame while the rail is still wide.
+                  * Faded as well, so it is gone before the clip reaches it. It
+                  * stays in the accessibility tree either way, so a collapsed
+                  * rail is still navigable without sight. */}
+                <span
+                  className={`whitespace-nowrap motion-safe:transition-opacity motion-safe:duration-150 ${
+                    collapsed ? "opacity-0" : ""
+                  }`}
+                >
+                  {item.label}
+                </span>
               </Link>
             </li>
           );
@@ -229,6 +237,17 @@ function CollectionLinks({
   );
 }
 
+/* Collapsed, the rail is 4.5rem with a 1px border, leaving 71px; a 20px icon
+ * centred in that starts 25.5px in. The links carry 12px of their own, so the
+ * container supplies the other 13.5px. Left-aligned at every width, so the icon
+ * stays put while the rail closes around it instead of jumping to the middle
+ * on the first frame. */
+const RAIL_PAD_COLLAPSED = "px-[13.5px]";
+
+/* motion-safe: - reduced motion gets the instant collapse it always had. */
+const GLIDE = "motion-safe:transition-[width] motion-safe:duration-200 motion-safe:ease-out";
+const GLIDE_PADDING = "motion-safe:transition-[padding] motion-safe:duration-200 motion-safe:ease-out";
+
 export function AppShell({
   children,
   action,
@@ -241,6 +260,13 @@ export function AppShell({
    * the pathname in an effect would do the same job by setting state during a
    * render pass, which is the cascading-render the compiler warns about. */
   const [open, setOpen] = useState(false);
+
+  /* The rail glides only once the toggle has been clicked. The server snapshot
+   * says "expanded", so someone who left it collapsed gets an expanded first
+   * render that flips to collapsed right after hydration - with the transition
+   * always on, that flip would play as a glide on every page load and every
+   * navigation, since each page mounts its own AppShell. */
+  const [glide, setGlide] = useState(false);
 
   /* Read through useSyncExternalStore so the first render matches the server's
    * - see lib/sidebar.ts. Collapsing is a desktop idea; the phone drawer is
@@ -267,9 +293,9 @@ export function AppShell({
       {/* Desktop rail. Sticky rather than fixed, so the footer below the content
         * column is still reachable without the sidebar overlapping it. */}
       <aside
-        className={`hidden shrink-0 border-r border-rule bg-canvas lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col ${
+        className={`hidden shrink-0 overflow-hidden border-r border-rule bg-canvas lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col ${
           collapsed ? "w-[4.5rem]" : "w-64"
-        }`}
+        } ${glide ? GLIDE : ""}`}
       >
         {/* Collapsed, the toggle sits above the mark: it is the one control
           * that is always in the same place, and hunting for it below a stack
@@ -285,7 +311,10 @@ export function AppShell({
 
           <button
             type="button"
-            onClick={() => setSidebarCollapsed(!collapsed)}
+            onClick={() => {
+              setGlide(true);
+              setSidebarCollapsed(!collapsed);
+            }}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
@@ -315,7 +344,11 @@ export function AppShell({
           </button>
         </div>
 
-        <div className={`min-h-0 flex-1 overflow-y-auto ${collapsed ? "px-3" : "px-4"}`}>
+        <div
+          className={`min-h-0 flex-1 overflow-y-auto ${collapsed ? RAIL_PAD_COLLAPSED : "px-4"} ${
+            glide ? GLIDE_PADDING : ""
+          }`}
+        >
           <NavLinks collapsed={collapsed} />
           {/* useSearchParams needs a boundary above it or a statically
             * prerendered page fails to build. Putting it here rather than in
@@ -325,7 +358,7 @@ export function AppShell({
           </Suspense>
         </div>
 
-        <div className={collapsed ? "px-3 pb-1" : "px-4 pb-1"}>
+        <div className={`pb-1 ${collapsed ? RAIL_PAD_COLLAPSED : "px-4"} ${glide ? GLIDE_PADDING : ""}`}>
           <NavLinks collapsed={collapsed} items={[HELP]} />
         </div>
 
