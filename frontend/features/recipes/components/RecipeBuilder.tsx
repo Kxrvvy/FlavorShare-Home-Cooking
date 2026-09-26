@@ -32,7 +32,6 @@ import { TAG_LABELS, tagLabel, tagName } from "@/lib/categories";
 import { CUISINES, OTHER_CUISINE } from "@/lib/cuisines";
 import {
   MAX_WORDS,
-  amountOnly,
   countWords,
   cuisineText,
   digitsOnly,
@@ -45,6 +44,7 @@ import {
   timeToMinutes,
   unitText,
 } from "@/lib/inputs";
+import { formatQuantity, quantityText, toApiQuantity } from "@/lib/quantity";
 import { RecipePreview } from "@/features/recipes/components/RecipePreview";
 import { refreshCollectionCounts } from "@/lib/collectionCounts";
 import { useSession } from "@/lib/useSession";
@@ -112,7 +112,6 @@ const UNITS = [
 const DIFFICULTIES = ["easy", "medium", "hard"] as const;
 
 /** DECIMAL(6,2) - four digits before the point, two after. */
-const QUANTITY = /^\d{1,4}(\.\d{1,2})?$/;
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -338,7 +337,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
                 return {
                   key,
                   rowId: row.recipe_ingredient_id,
-                  quantity: row.quantity === null ? "" : String(Number(row.quantity)),
+                  quantity: formatQuantity(row.quantity),
                   unit: row.unit ?? "",
                   name: row.ingredient.name,
                   status: SAVED,
@@ -572,9 +571,13 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       const name = row.name.trim();
       if (!name) return;
 
-      if (row.quantity.trim() && !QUANTITY.test(row.quantity.trim())) {
+      /* What is typed ("1/2") and what is stored (0.5) differ, so the API
+       * value is worked out once here and used for both the create and the
+       * update below. */
+      const quantity = row.quantity.trim() ? toApiQuantity(row.quantity) : null;
+      if (row.quantity.trim() && quantity === null) {
         patchIngredient(row.key, {
-          status: { state: "error", message: "Amounts must be numbers like 200 or 1.5, up to 9999.99." },
+          status: { state: "error", message: "Use an amount like 2, 1/2 or 1 1/2, above 0 and up to 9999.99." },
         });
         return;
       }
@@ -582,7 +585,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       patchIngredient(row.key, { status: { state: "saving" } });
 
       const payload = {
-        quantity: row.quantity.trim() || null,
+        quantity,
         unit: row.unit.trim() || null,
       };
 
@@ -595,7 +598,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         if (rowId === null) {
           const created = await addIngredient(recipe, {
             name,
-            quantity: row.quantity.trim() || undefined,
+            quantity: quantity ?? undefined,
             unit: row.unit.trim() || undefined,
           });
           ids.current[row.key] = created.recipe_ingredient_id;
@@ -1344,10 +1347,17 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
               <div className="grid grid-cols-[5rem_7rem_1fr] gap-2 sm:grid-cols-[5rem_7rem_1fr_auto]">
                 <input
                   value={row.quantity}
-                  onChange={(e) => patchIngredient(row.key, { quantity: amountOnly(e.target.value) })}
-                  onBlur={() => saveIngredient(row)}
+                  onChange={(e) => patchIngredient(row.key, { quantity: quantityText(e.target.value) })}
+                  onBlur={() => {
+                    /* Tidy what was typed the way it will be shown after a
+                     * reload - "2.0" becomes 2, "3/6" becomes 1/2 - and leave
+                     * anything that is not an amount alone, so the error below
+                     * has something to point at. */
+                    const tidy = formatQuantity(row.quantity);
+                    if (tidy !== row.quantity) patchIngredient(row.key, { quantity: tidy });
+                    saveIngredient({ ...row, quantity: tidy });
+                  }}
                   disabled={locked}
-                  inputMode="decimal"
                   aria-label={`Amount for ingredient ${index + 1}`}
                   placeholder="200"
                   className={`w-full min-w-0 ${FIELD} disabled:opacity-50`}

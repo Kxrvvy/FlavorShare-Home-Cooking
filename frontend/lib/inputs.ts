@@ -35,21 +35,6 @@ export function digitsOnly(value: string, maxLength = 3): string {
   return value.replace(/\D/g, "").slice(0, maxLength);
 }
 
-/** An ingredient amount: digits and at most one decimal point, shaped to the
- * DECIMAL(6,2) column - four whole digits, two after the point. A bare "."
- * becomes "0." rather than an amount nothing can save. Fractions like 1/2 are
- * not accepted because the column cannot hold them; 0.5 is the way to say it. */
-export function amountOnly(value: string): string {
-  const cleaned = value.replace(/[^\d.]/g, "");
-  const dot = cleaned.indexOf(".");
-
-  if (dot === -1) return cleaned.slice(0, 4);
-
-  const whole = cleaned.slice(0, dot).slice(0, 4) || "0";
-  const fraction = cleaned.slice(dot + 1).replace(/\./g, "").slice(0, 2);
-  return `${whole}.${fraction}`;
-}
-
 /* Prep and cook time: a masked HH:MM field, the way a card's expiry date is
  * entered. Digits only, the colon put in for you, and a minutes value that
  * cannot exceed 59 - a third digit above 5 becomes 0 + that digit, the way an

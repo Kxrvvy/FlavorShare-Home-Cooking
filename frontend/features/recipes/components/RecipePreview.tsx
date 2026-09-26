@@ -18,6 +18,8 @@
  * has been typed this second, including a row that has not saved yet.
  */
 
+import { formatQuantity } from "@/lib/quantity";
+
 type PreviewIngredient = {
   key: string;
   quantity: string;
@@ -209,7 +211,7 @@ export function RecipePreview({
                     <li key={row.key} className="flex gap-2 text-sm text-ink">
                       <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-maroon" />
                       <span>
-                        {[row.quantity.trim(), row.unit.trim()].filter(Boolean).join(" ")}{" "}
+                        {[formatQuantity(row.quantity), row.unit.trim()].filter(Boolean).join(" ")}{" "}
                         {row.name.trim()}
                       </span>
                     </li>
