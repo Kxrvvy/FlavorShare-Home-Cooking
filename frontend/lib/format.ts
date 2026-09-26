@@ -38,18 +38,34 @@ function formatCommunityMeta(recipe: Recipe): string | null {
     .join(" - ") || null;
 }
 
-export function formatRecipeMeta(recipe: Recipe): string {
+/** The long form: time, difficulty and servings, e.g. "35 MIN - EASY PREP - 2
+ * SERVES". Empty for a recipe with none of them. Its own function so the card
+ * can ask whether it applies (hasDetailMeta) without a second copy of the
+ * rule. */
+function formatDetailMeta(recipe: Recipe): string {
   const total = (recipe.prep_time ?? 0) + (recipe.cook_time ?? 0);
 
   // Each part is dropped when its field is null rather than printed as "0 MIN"
   // or "NULL PREP" - a draft recipe can legitimately have none of them yet.
-  const known = [
+  return [
     total > 0 ? formatDuration(total) : null,
     formatDifficulty(recipe.difficulty),
     recipe.servings ? `${recipe.servings} SERVES` : null,
   ]
     .filter(Boolean)
     .join(" - ");
+}
+
+/** Whether the card's meta line is the long form (which may wrap to two lines)
+ * rather than the short community one ("4.0 RATING - 2 SAVES", which must stay
+ * on one). Read from the same rule formatRecipeMeta uses, so the text and how
+ * it is laid out can never disagree about which one a recipe got. */
+export function hasDetailMeta(recipe: Recipe): boolean {
+  return formatDetailMeta(recipe) !== "";
+}
+
+export function formatRecipeMeta(recipe: Recipe): string {
+  const known = formatDetailMeta(recipe);
 
   // A recipe with none of the above - the whole imported catalogue, which
   // carries no structured prep/cook/servings/difficulty at all - falls back

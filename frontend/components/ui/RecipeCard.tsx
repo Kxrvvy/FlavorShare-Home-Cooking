@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { formatRecipeMeta } from "@/lib/format";
+import { formatRecipeMeta, hasDetailMeta } from "@/lib/format";
 import type { Recipe } from "@/lib/types";
 
 /* One card, used by both FEATURED RECIPES and EXPLORE NEW RECIPES.
@@ -20,6 +20,8 @@ type RecipeCardProps = {
 
 export function RecipeCard({ recipe, size = "default" }: RecipeCardProps) {
   const meta = formatRecipeMeta(recipe);
+  // Which of the two meta lines this is decides how it may wrap - see below.
+  const detailed = hasDetailMeta(recipe);
   const isVegan = recipe.tags.includes("vegan");
 
   return (
@@ -69,13 +71,31 @@ export function RecipeCard({ recipe, size = "default" }: RecipeCardProps) {
          * their meta rows and buttons up across a row.
          *
          * The two arrangements are both from the export: mobile stacks the meta
-         * above a full-width button, desktop sets them side by side. */}
+         * above a full-width button, desktop sets them side by side.
+         *
+         * Desktop treats the two meta lines differently, on purpose:
+         * - the long form (time, difficulty, servings) may wrap, and is
+         *   allowed to shrink down to 7.5rem beside the button, so the button
+         *   stays next to the text instead of dropping under it. Those cards
+         *   simply come out taller.
+         * - the short form (rating, saves) never wraps, whatever the width.
+         *
+         * The row itself still wraps for both, and that is what stops the long
+         * form collapsing: cards beside the sidebar are only ~220-320px wide
+         * below 1300px, and with the button taking 129px of that a text column
+         * with no minimum shrinks to 35px and runs to nine lines. Below 7.5rem
+         * of room the button drops under the text, exactly as it always has. */}
         <div className="mt-auto flex flex-col gap-4 pt-5 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-3">
           {/* Cuisine leads the line and links to Explore filtered by it, so
-           * the card is also the quickest way to see more of the same. The
-           * rest stays one plain string, exactly as formatRecipeMeta builds
-           * it. Six of the fifty imports have no cuisine, so it is optional. */}
-          <p className="flex flex-wrap items-center gap-x-1.5 font-display text-[11px] font-medium tracking-wide text-ink">
+           * the card is also the quickest way to see more of the same. Plain
+           * inline flow rather than a flex row, so a long line breaks between
+           * words like a sentence instead of only between its three pieces.
+           * Six of the fifty imports have no cuisine, so it is optional. */}
+          <p
+            className={`font-display text-[11px] font-medium tracking-wide text-ink ${
+              detailed ? "lg:min-w-[7.5rem] lg:flex-1" : "whitespace-nowrap"
+            }`}
+          >
             {recipe.cuisine_type && (
               <>
                 <Link
@@ -84,15 +104,19 @@ export function RecipeCard({ recipe, size = "default" }: RecipeCardProps) {
                 >
                   {recipe.cuisine_type}
                 </Link>
-                {meta && <span aria-hidden="true">-</span>}
+                {meta && (
+                  <span aria-hidden="true" className="mx-1.5">
+                    -
+                  </span>
+                )}
               </>
             )}
-            {meta && <span>{meta}</span>}
+            {meta}
           </p>
 
           <Link
             href={`/recipes/${recipe.recipe_id}`}
-            className="block rounded-full border border-ink/70 px-6 py-2.5 text-center font-display text-[11px] font-medium tracking-widest text-ink transition-colors hover:bg-ink hover:text-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon lg:inline-block lg:w-auto"
+            className="block rounded-full border border-ink/70 px-6 py-2.5 text-center font-display text-[11px] font-medium tracking-widest text-ink transition-colors hover:bg-ink hover:text-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon lg:inline-block lg:w-auto lg:shrink-0"
           >
             VIEW RECIPE
           </Link>
