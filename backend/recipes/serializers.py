@@ -17,6 +17,8 @@ only ever fire on an update - a recipe created a second ago has no children
 to check.
 """
 
+import unicodedata
+
 from django.contrib.auth import get_user_model
 # Aliased on purpose. Django's ValidationError and DRF's share a name but are
 # not interchangeable: raising Django's from a serializer produces a 500, not
@@ -29,6 +31,17 @@ from rest_framework.serializers import as_serializer_error
 from .models import Image, Ingredient, Recipe, RecipeIngredient, Step
 
 User = get_user_model()
+
+
+def _contains_number(value):
+    """True if any character is a number of any kind, not only 0-9.
+
+    A fraction like one-half and Arabic-Indic digits are numbers too, so this reads the Unicode
+    category (any N*) rather than str.isdigit(), which misses fractions. The
+    builder strips the same set as it is typed (\\p{N} in lib/inputs.ts) - the
+    two definitions have to stay the same one.
+    """
+    return any(unicodedata.category(ch).startswith('N') for ch in value)
 
 
 def _normalise_ingredient_name(value):
@@ -200,6 +213,35 @@ class RecipeIngredientSerializer(serializers.ModelSerializer):
             'unit',
             'notes',
         ]
+
+    def validate_unit(self, value):
+        if not value:
+            return value
+
+        if len(value) > MAX_UNIT_LENGTH:
+            raise serializers.ValidationError(
+                f'A unit is limited to {MAX_UNIT_LENGTH} characters '
+                f'(this one is {len(value)}).'
+            )
+
+        if _contains_number(value):
+            raise serializers.ValidationError(
+                'A unit cannot contain a number - put the amount in the '
+                'amount box.'
+            )
+
+        return value
+
+    def validate_ingredient_name(self, value):
+        # The amount has its own box, so a digit here is almost always the
+        # amount typed into the wrong one ("2 eggs" as a name). Checked before
+        # normalisation, on what was actually sent.
+        if _contains_number(value):
+            raise serializers.ValidationError(
+                'An ingredient name cannot contain a number - put the amount '
+                'in the amount box.'
+            )
+        return value
 
     def validate(self, attrs):
         recipe = attrs.get('recipe', getattr(self.instance, 'recipe', None))
@@ -385,6 +427,30 @@ class RecipeDetailSerializer(RecipeListSerializer):
         read_only_fields = fields
 
 
+# The builder trims what is typed to this and shows a live counter, but a
+# direct API call never touches the builder - so the limit is enforced here as
+# well. Counted as whitespace-separated words, the same definition the builder
+# uses (a run of non-space characters), so the two never disagree about whether
+# a text is over.
+MAX_TEXT_WORDS = 300
+
+
+def _check_word_limit(value, label):
+    if value and len(value.split()) > MAX_TEXT_WORDS:
+        raise serializers.ValidationError(
+            f'{label} is limited to {MAX_TEXT_WORDS} words '
+            f'(this one is {len(value.split())}).'
+        )
+    return value
+
+
+# The unit box is for "g", "tbsp", "cloves" - not "2 cups", which belongs in
+# the amount box and would print as "2 2 cups". The builder stops these being
+# typed; this holds for a direct API call too. The column allows 30, but
+# nothing that is really a unit needs more than 20.
+MAX_UNIT_LENGTH = 20
+
+
 class RecipeWriteSerializer(serializers.ModelSerializer):
     """Create and update a recipe.
 
@@ -422,6 +488,12 @@ class RecipeWriteSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
+
+    def validate_description(self, value):
+        return _check_word_limit(value, 'The description')
+
+    def validate_body(self, value):
+        return _check_word_limit(value, 'This text')
 
     def validate(self, attrs):
         """Rule 2 from the module docstring: the publish gate.

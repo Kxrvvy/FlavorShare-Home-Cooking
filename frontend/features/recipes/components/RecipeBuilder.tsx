@@ -29,6 +29,22 @@ import {
   uploadRecipeImage,
 } from "@/features/recipes/api";
 import { TAG_LABELS, tagLabel, tagName } from "@/lib/categories";
+import { CUISINES, OTHER_CUISINE } from "@/lib/cuisines";
+import {
+  MAX_WORDS,
+  amountOnly,
+  countWords,
+  cuisineText,
+  digitsOnly,
+  ingredientNameText,
+  isCompleteTime,
+  limitWords,
+  maskTime,
+  minutesToTime,
+  normaliseCuisine,
+  timeToMinutes,
+  unitText,
+} from "@/lib/inputs";
 import { RecipePreview } from "@/features/recipes/components/RecipePreview";
 import { refreshCollectionCounts } from "@/lib/collectionCounts";
 import { useSession } from "@/lib/useSession";
@@ -100,21 +116,11 @@ const QUANTITY = /^\d{1,4}(\.\d{1,2})?$/;
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-/* Accepts what people type, including the two formats the placeholder shows. */
-function parseMinutes(value: string) {
-  const match = value
-    .trim()
-    .match(/^(?:(\d+)\s*h(?:ours?|rs?)?\s*)?(?:(\d+)\s*(?:m(?:in(?:ute)?s?)?)?)?$/i);
-  if (!match || (!match[1] && !match[2])) return null;
-  return Number(match[1] || 0) * 60 + Number(match[2] || 0);
-}
-
-function minutesToText(value: number | null) {
-  if (value === null) return "";
-  if (value < 60) return `${value} mins`;
-  const hours = Math.floor(value / 60);
-  const mins = value % 60;
-  return mins ? `${hours} hr ${mins} mins` : `${hours} hr`;
+/* The preview's wording for a masked time: minutes, as the recipe page writes
+ * them, or nothing until all four digits are in. */
+function previewMinutes(mask: string) {
+  const minutes = timeToMinutes(mask);
+  return minutes === null ? "" : `${minutes} min`;
 }
 
 function makeKey() {
@@ -146,6 +152,23 @@ function RowState({ status }: { status: RowStatus }) {
   return null;
 }
 
+/** "42 / 300 words", turning red once the limit is reached. The textarea above
+ * it trims anything past MAX_WORDS, so this is what tells the person why their
+ * last words stopped appearing. */
+function WordCount({ id, text }: { id: string; text: string }) {
+  const words = countWords(text);
+  const full = words >= MAX_WORDS;
+
+  return (
+    <p
+      id={id}
+      className={`mt-1 text-right text-xs ${full ? "font-semibold text-red-600" : "text-muted"}`}
+    >
+      {words} / {MAX_WORDS} words
+    </p>
+  );
+}
+
 export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const { user } = useSession();
   const router = useRouter();
@@ -168,6 +191,10 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
   const [cookTime, setCookTime] = useState("");
   const [prepTime, setPrepTime] = useState("");
   const [cuisine, setCuisine] = useState("");
+  /* Whether the dropdown is on "Other" and the text box is showing. Its own
+   * state because it cannot be derived from `cuisine`: choosing Other with
+   * nothing typed yet leaves `cuisine` empty, exactly like "Not stated". */
+  const [customCuisine, setCustomCuisine] = useState(false);
   const [difficulty, setDifficulty] = useState("");
 
   const [ingredients, setIngredients] = useState<IngredientDraft[]>([emptyIngredient()]);
@@ -264,9 +291,15 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         setBody(recipe.body ?? "");
         setEquipment(recipe.equipment ?? "");
         setServings(recipe.servings === null ? "" : String(recipe.servings));
-        setCookTime(minutesToText(recipe.cook_time));
-        setPrepTime(minutesToText(recipe.prep_time));
+        setCookTime(minutesToTime(recipe.cook_time));
+        setPrepTime(minutesToTime(recipe.prep_time));
         setCuisine(recipe.cuisine_type ?? "");
+        // Anything stored that is not on the list - typed under Other, or a
+        // value from before this was a list - reopens as Other with the text.
+        setCustomCuisine(
+          !!recipe.cuisine_type &&
+            !(CUISINES as readonly string[]).includes(recipe.cuisine_type)
+        );
         setDifficulty(recipe.difficulty ?? "");
         setPublished(recipe.status === "published");
 
@@ -276,8 +309,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           body: recipe.body ?? "",
           equipment: recipe.equipment ?? "",
           servings: recipe.servings === null ? "" : String(recipe.servings),
-          cook_time: minutesToText(recipe.cook_time),
-          prep_time: minutesToText(recipe.prep_time),
+          cook_time: minutesToTime(recipe.cook_time),
+          prep_time: minutesToTime(recipe.prep_time),
           cuisine_type: recipe.cuisine_type ?? "",
           difficulty: recipe.difficulty ?? "",
         };
@@ -411,7 +444,15 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       runExclusive("recipe", async () => {
         const recipe = ids.current.recipe;
         if (!recipe) return;
-        if (value === (saved.current[key] ?? "")) return;
+        if (value === (saved.current[key] ?? "")) {
+          // Nothing to save - but this field may still be showing the error
+          // from an earlier attempt to save something else. Put back to
+          // exactly what is already stored, it is valid again, and leaving
+          // the message up would flag a correct value. Returns the same
+          // object when there is no error, so a plain blur re-renders nothing.
+          setFieldErrors((e) => (e[errorKey] ? { ...e, [errorKey]: "" } : e));
+          return;
+        }
 
         const payload = build();
         if (payload === null) return; // invalid; the message is already set
@@ -452,31 +493,62 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     return { servings: Number(trimmed) };
   });
 
-  const saveCookTime = fieldSaver("cook_time", cookTime, () => {
-    const trimmed = cookTime.trim();
-    if (!trimmed) return { cook_time: null };
-    const minutes = parseMinutes(trimmed);
-    if (!minutes) {
-      setFieldErrors((e) => ({ ...e, cook_time: "Use a time such as 45 mins or 1 hr 30 mins." }));
-      return null;
-    }
-    return { cook_time: minutes };
-  });
+  /* Both times are the same masked HH:MM field, so both save the same way: an
+   * empty one clears the value, a half-typed one is refused with the format to
+   * use, and a complete one is sent as total minutes. 00:00 means "not
+   * stated" and clears it too. */
+  function timeSaver(key: "cook_time" | "prep_time", value: string) {
+    return fieldSaver(key, value, () => {
+      if (!value) return { [key]: null };
+      if (!isCompleteTime(value)) {
+        setFieldErrors((e) => ({
+          ...e,
+          [key]: "Enter the time as HH:MM, for example 00:45 for 45 minutes.",
+        }));
+        return null;
+      }
+      return { [key]: timeToMinutes(value) };
+    });
+  }
 
-  const savePrepTime = fieldSaver("prep_time", prepTime, () => {
-    const trimmed = prepTime.trim();
-    if (!trimmed) return { prep_time: null };
-    const minutes = parseMinutes(trimmed);
-    if (!minutes) {
-      setFieldErrors((e) => ({ ...e, prep_time: "Use a time such as 15 mins, or leave it empty." }));
-      return null;
-    }
-    return { prep_time: minutes };
-  });
+  const saveCookTime = timeSaver("cook_time", cookTime);
+  const savePrepTime = timeSaver("prep_time", prepTime);
 
-  const saveCuisine = fieldSaver("cuisine_type", cuisine, () => ({
-    cuisine_type: cuisine.trim() || null,
-  }));
+  /* Takes the value rather than reading state: it runs from the select's
+   * onChange, before the state update it accompanies has rendered. A dropdown
+   * has no half-typed state to wait out, so it saves on choosing rather than
+   * on blur - blur is unreliable for a select (mobile Safari does not always
+   * blur it when a button is tapped), and a choice lost that way is silent. */
+  const saveCuisine = (next: string) =>
+    fieldSaver("cuisine_type", next, () => ({
+      cuisine_type: next.trim() || null,
+    }))();
+
+  /* The dropdown. A listed choice is the value; Other is only the trigger for
+   * the text box, so it clears what was there instead of storing the word. */
+  function chooseCuisine(choice: string) {
+    if (choice === OTHER_CUISINE) {
+      setCustomCuisine(true);
+      setCuisine("");
+      void saveCuisine("");
+      return;
+    }
+    setCustomCuisine(false);
+    setCuisine(choice);
+    void saveCuisine(choice);
+  }
+
+  /* The text box, on blur - typed text, unlike a dropdown, has a half-finished
+   * state worth waiting out. Tidied first; if it turns out to be a listed
+   * cuisine the dropdown takes over. */
+  function finishCustomCuisine() {
+    const clean = normaliseCuisine(cuisine, CUISINES);
+    if (clean && (CUISINES as readonly string[]).includes(clean)) {
+      setCustomCuisine(false);
+    }
+    setCuisine(clean);
+    void saveCuisine(clean);
+  }
 
   const saveDifficulty = fieldSaver("difficulty", difficulty, () => ({
     difficulty: (difficulty || null) as "easy" | "medium" | "hard" | null,
@@ -1018,8 +1090,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           body={body}
           equipment={equipment}
           servings={servings}
-          prepTime={prepTime}
-          cookTime={cookTime}
+          prepTime={previewMinutes(prepTime)}
+          cookTime={previewMinutes(cookTime)}
           cuisine={cuisine}
           difficulty={difficulty}
           cover={coverPreview}
@@ -1081,14 +1153,16 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
       <textarea
         value={description}
-        onChange={(e) => setDescription(e.target.value)}
+        onChange={(e) => setDescription(limitWords(e.target.value))}
         onBlur={saveDescription}
         disabled={locked}
         placeholder="Share a little more about your dish"
         rows={3}
         aria-label="Description"
+        aria-describedby="description-count"
         className={`mt-6 w-full resize-none ${FIELD} disabled:opacity-50`}
       />
+      <WordCount id="description-count" text={description} />
 
       {/* Long-form content beyond the short description above - a headnote,
         * cooking tips, whatever would not fit in a couple of sentences.
@@ -1099,14 +1173,16 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       </label>
       <textarea
         value={body}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={(e) => setBody(limitWords(e.target.value))}
         onBlur={saveBody}
         disabled={locked}
-        placeholder="A headnote, cooking tips, serving suggestions - as much as you like"
+        placeholder="A headnote, cooking tips, serving suggestions"
         rows={5}
         aria-label="More about this recipe"
+        aria-describedby="body-count"
         className={`mt-1.5 w-full resize-none ${FIELD} disabled:opacity-50`}
       />
+      <WordCount id="body-count" text={body} />
 
       {/* One row for the facts. They used to be split across the two columns,
         * with the times filed under Steps and the serving size under
@@ -1116,7 +1192,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           Serves
           <input
             value={servings}
-            onChange={(e) => setServings(e.target.value)}
+            onChange={(e) => setServings(digitsOnly(e.target.value))}
             onBlur={saveServings}
             disabled={locked}
             inputMode="numeric"
@@ -1132,10 +1208,11 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           Prep time
           <input
             value={prepTime}
-            onChange={(e) => setPrepTime(e.target.value)}
+            onChange={(e) => setPrepTime(maskTime(e.target.value))}
             onBlur={savePrepTime}
             disabled={locked}
-            placeholder="15 mins"
+            inputMode="numeric"
+            placeholder="HH:MM"
             className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
           />
           {fieldErrors.prep_time && (
@@ -1147,10 +1224,11 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           Cook time
           <input
             value={cookTime}
-            onChange={(e) => setCookTime(e.target.value)}
+            onChange={(e) => setCookTime(maskTime(e.target.value))}
             onBlur={saveCookTime}
             disabled={locked}
-            placeholder="1 hr 30 mins"
+            inputMode="numeric"
+            placeholder="HH:MM"
             className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
           />
           {fieldErrors.cook_time && (
@@ -1160,15 +1238,31 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
 
         <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
           Cuisine
-          <input
-            value={cuisine}
-            onChange={(e) => setCuisine(e.target.value)}
-            onBlur={saveCuisine}
+          <select
+            value={customCuisine ? OTHER_CUISINE : cuisine}
+            onChange={(e) => chooseCuisine(e.target.value)}
             disabled={locked}
-            maxLength={50}
-            placeholder="Filipino"
             className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
-          />
+          >
+            <option value="">Not stated</option>
+            {CUISINES.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+            <option value={OTHER_CUISINE}>Other...</option>
+          </select>
+          {customCuisine && (
+            <input
+              value={cuisine}
+              onChange={(e) => setCuisine(cuisineText(e.target.value))}
+              onBlur={finishCustomCuisine}
+              disabled={locked}
+              placeholder="Type the cuisine"
+              aria-label="Cuisine (type it)"
+              className={`w-full font-normal normal-case tracking-normal text-ink ${FIELD} disabled:opacity-50`}
+            />
+          )}
         </label>
 
         <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
@@ -1250,7 +1344,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
               <div className="grid grid-cols-[5rem_7rem_1fr] gap-2 sm:grid-cols-[5rem_7rem_1fr_auto]">
                 <input
                   value={row.quantity}
-                  onChange={(e) => patchIngredient(row.key, { quantity: e.target.value })}
+                  onChange={(e) => patchIngredient(row.key, { quantity: amountOnly(e.target.value) })}
                   onBlur={() => saveIngredient(row)}
                   disabled={locked}
                   inputMode="decimal"
@@ -1260,21 +1354,19 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
                 />
                 <input
                   value={row.unit}
-                  onChange={(e) => patchIngredient(row.key, { unit: e.target.value })}
+                  onChange={(e) => patchIngredient(row.key, { unit: unitText(e.target.value) })}
                   onBlur={() => saveIngredient(row)}
                   disabled={locked}
                   list="ingredient-units"
-                  maxLength={30}
                   aria-label={`Unit for ingredient ${index + 1}`}
                   placeholder="g"
                   className={`w-full min-w-0 ${FIELD} disabled:opacity-50`}
                 />
                 <input
                   value={row.name}
-                  onChange={(e) => patchIngredient(row.key, { name: e.target.value })}
+                  onChange={(e) => patchIngredient(row.key, { name: ingredientNameText(e.target.value) })}
                   onBlur={() => saveIngredient(row)}
                   disabled={locked}
-                  maxLength={100}
                   aria-label={`Ingredient ${index + 1}`}
                   placeholder="plain flour"
                   className={`col-span-3 row-start-2 w-full min-w-0 sm:col-span-1 sm:col-start-3 sm:row-start-1 ${FIELD} disabled:opacity-50`}

@@ -1189,6 +1189,82 @@ class RecipeIngredientSerializerTests(RecipeTestCase):
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
 
+    def test_a_unit_may_be_up_to_20_characters(self):
+        serializer = RecipeIngredientSerializer(
+            data=self._data(unit='x' * 20)
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_a_unit_over_20_characters_is_refused(self):
+        """The builder stops typing at 20, but a direct API call skips the
+        builder - and the column itself would have allowed 30."""
+        serializer = RecipeIngredientSerializer(
+            data=self._data(unit='x' * 21)
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('unit', serializer.errors)
+        self.assertIn('20 characters', str(serializer.errors['unit']))
+
+    def test_a_unit_may_not_contain_a_number(self):
+        """The amount goes in the amount box. "2 cups" in the unit box would
+        print as "2 2 cups" on the recipe page."""
+        for bad in ('2 cups', 'cup2', '1/2', '½ cup', '٣ cups'):
+            with self.subTest(unit=bad):
+                serializer = RecipeIngredientSerializer(
+                    data=self._data(unit=bad)
+                )
+                self.assertFalse(serializer.is_valid())
+                self.assertIn('unit', serializer.errors)
+
+    def test_ordinary_units_are_accepted(self):
+        for unit in ('g', 'tbsp', 'cups', 'fl. oz', 'pinch', 'cloves', ''):
+            with self.subTest(unit=unit):
+                serializer = RecipeIngredientSerializer(
+                    data=self._data(unit=unit)
+                )
+                self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_an_ingredient_name_may_not_contain_a_number(self):
+        """Amounts have their own box. A digit in the name is the amount typed
+        into the wrong one - "2 eggs" as a name, next to an amount of 2."""
+        for bad in ('2 eggs', 'egg2', '7 spice', '2% milk', '½ onion', '٣ eggs'):
+            with self.subTest(name=bad):
+                serializer = RecipeIngredientSerializer(
+                    data=self._data(ingredient_name=bad)
+                )
+                self.assertFalse(serializer.is_valid())
+                self.assertIn('ingredient_name', serializer.errors)
+                self.assertIn('number', str(serializer.errors['ingredient_name']))
+
+    def test_ordinary_ingredient_names_are_accepted(self):
+        for name in (
+            'olive oil', 'jalapeño', 'crème fraîche',
+            "chef's salt", 'sun-dried tomato', 'Plain Flour',
+        ):
+            with self.subTest(name=name):
+                serializer = RecipeIngredientSerializer(
+                    data=self._data(ingredient_name=name)
+                )
+                self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_a_name_with_a_number_is_refused_on_update_too(self):
+        """A row saved on blur is a PATCH, not a create - same rule."""
+        link = RecipeIngredient.objects.create(
+            recipe=self.recipe,
+            ingredient=Ingredient.objects.create(name='salt'),
+        )
+        serializer = RecipeIngredientSerializer(
+            link, data={'ingredient_name': 'salt2'}, partial=True,
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('ingredient_name', serializer.errors)
+
+    def test_an_empty_or_missing_unit_is_still_fine(self):
+        serializer = RecipeIngredientSerializer(
+            data=self._data(unit=None)
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
 
 class RecipeWriteSerializerTests(RecipeTestCase):
     """Ownership, the view counter, and the publish gate."""
@@ -1228,6 +1304,44 @@ class RecipeWriteSerializerTests(RecipeTestCase):
     def test_a_near_empty_draft_still_saves(self):
         serializer = RecipeWriteSerializer(data={'title': 'Lumpia'})
         self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_description_and_body_accept_exactly_300_words(self):
+        for field in ('description', 'body'):
+            with self.subTest(field=field):
+                serializer = RecipeWriteSerializer(
+                    data={'title': 'Lumpia', field: ' '.join(['word'] * 300)},
+                )
+                self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_description_and_body_refuse_301_words(self):
+        """The builder trims what is typed, but a direct API call skips the
+        builder - so the limit has to hold here too."""
+        for field in ('description', 'body'):
+            with self.subTest(field=field):
+                serializer = RecipeWriteSerializer(
+                    data={'title': 'Lumpia', field: ' '.join(['word'] * 301)},
+                )
+                self.assertFalse(serializer.is_valid())
+                self.assertIn(field, serializer.errors)
+                self.assertIn('300 words', str(serializer.errors[field]))
+
+    def test_the_word_count_ignores_extra_whitespace_and_newlines(self):
+        """300 words spread over blank lines and runs of spaces is still 300."""
+        padded = 'word\n\n   ' * 300
+        for field in ('description', 'body'):
+            with self.subTest(field=field):
+                serializer = RecipeWriteSerializer(
+                    data={'title': 'Lumpia', field: padded},
+                )
+                self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_an_empty_description_and_body_are_still_fine(self):
+        for value in ('', None):
+            with self.subTest(value=value):
+                serializer = RecipeWriteSerializer(
+                    data={'title': 'Lumpia', 'description': value, 'body': value},
+                )
+                self.assertTrue(serializer.is_valid(), serializer.errors)
 
     def test_publishing_without_steps_is_refused(self):
         RecipeIngredient.objects.create(
