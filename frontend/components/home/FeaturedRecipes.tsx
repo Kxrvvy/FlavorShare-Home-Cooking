@@ -28,25 +28,12 @@ export function FeaturedRecipes({ recipes }: { recipes: Recipe[] }) {
       className="mx-auto mt-12 w-full max-w-[1320px] px-5 lg:mt-16 lg:px-6"
     >
       <div className="rounded-3xl bg-panel px-5 py-8 lg:px-10 lg:py-10">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <h2
-            id="featured-heading"
-            className="font-display text-2xl font-bold uppercase tracking-tight text-ink lg:text-[1.9rem]"
-          >
-            Featured Recipes
-          </h2>
-
-          {/* Desktop only: top-right of the heading, full size, as before. */}
-          <div className="hidden lg:block">
-            <CarouselArrows
-              label="featured recipe"
-              onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
-              onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
-              canGoPrevious={index > 0}
-              canGoNext={index < recipes.length - 1}
-            />
-          </div>
-        </div>
+        <h2
+          id="featured-heading"
+          className="font-display text-2xl font-bold uppercase tracking-tight text-ink lg:text-[1.9rem]"
+        >
+          Featured Recipes
+        </h2>
 
         {/* Phone and tablet: one card, chosen by a smaller pair of arrows
           * centred beneath it rather than sharing a row with the heading. */}
