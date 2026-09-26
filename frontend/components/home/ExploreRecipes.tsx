@@ -105,13 +105,16 @@ export function ExploreRecipes({ recipes: initialRecipes }: { recipes: Recipe[] 
         <>
           {/* Mobile: a carousel in a panel, one card at a time. */}
           <div className="mt-8 rounded-3xl bg-panel px-5 py-6 lg:hidden">
-            <CarouselArrows
-              label="recipe"
-              onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
-              onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
-              canGoPrevious={index > 0}
-              canGoNext={index < recipes.length - 1}
-            />
+            <div className="flex justify-center">
+              <CarouselArrows
+                size="small"
+                label="recipe"
+                onPrevious={() => setIndex((i) => Math.max(0, i - 1))}
+                onNext={() => setIndex((i) => Math.min(recipes.length - 1, i + 1))}
+                canGoPrevious={index > 0}
+                canGoNext={index < recipes.length - 1}
+              />
+            </div>
             <div className="mt-5">
               <RecipeCard recipe={recipes[index]} />
             </div>
@@ -134,6 +137,8 @@ export function ExploreRecipes({ recipes: initialRecipes }: { recipes: Recipe[] 
           Explore more recipes
         </Link>
       </div>
+
+      
     </section>
   );
 }
