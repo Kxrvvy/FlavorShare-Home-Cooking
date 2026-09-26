@@ -60,6 +60,9 @@ export interface BrowseParams {
   cuisine_type?: string;
   difficulty?: "easy" | "medium" | "hard";
   ingredient?: string;
+  /** Average rating of at least this, 0-5. Unrated recipes have no average
+   * and are left out whenever it is set. */
+  min_rating?: number;
   prep_time_min?: number;
   prep_time_max?: number;
   cook_time_min?: number;

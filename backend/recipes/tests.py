@@ -1505,6 +1505,46 @@ class RecipeFilterTests(BrowseTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_min_rating_keeps_recipes_averaging_at_least_that(self):
+        """">= 4" includes a 4.0 exactly - Tofu curry (5 and 3) and Lentil
+        soup (4) both sit on the boundary."""
+        titles, _ = self.browse('?min_rating=4')
+
+        self.assertCountEqual(titles, ['Tofu curry', 'Lentil soup'])
+
+    def test_min_rating_drops_unrated_recipes(self):
+        """A recipe nobody has rated has no average, not an average of zero -
+        so asking for any minimum leaves it out rather than counting it as
+        the worst thing on the site."""
+        titles, _ = self.browse('?min_rating=1')
+
+        self.assertCountEqual(titles, ['Tofu curry', 'Lentil soup', 'Rice cake'])
+        self.assertNotIn('Adobo', titles)
+        self.assertNotIn('Vegan feast', titles)
+
+    def test_min_rating_above_every_average_returns_nothing(self):
+        titles, count = self.browse('?min_rating=5')
+
+        self.assertEqual(titles, [])
+        self.assertEqual(count, 0)
+
+    def test_min_rating_combines_with_a_tag_filter_without_duplicates(self):
+        """The join fan-out case: Tofu curry matches both tags, so its rows
+        multiply - and its average has to survive that unchanged, and the
+        recipe still has to come back once."""
+        titles, _ = self.browse('?tag=vegan&tag=gluten-free&min_rating=4')
+
+        self.assertCountEqual(titles, ['Tofu curry', 'Lentil soup'])
+
+    def test_min_rating_outside_zero_to_five_is_refused(self):
+        for bad in ('6', '-1', 'abc'):
+            with self.subTest(value=bad):
+                response = self.client.get(f'{RECIPES_URL}?min_rating={bad}')
+
+                self.assertEqual(
+                    response.status_code, status.HTTP_400_BAD_REQUEST
+                )
+
     def test_filter_by_one_tag(self):
         titles, _ = self.browse('?tag=vegan')
 

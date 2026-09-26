@@ -21,8 +21,8 @@ function toNumber(value: string): number | undefined {
 }
 
 /* The real Explore page: search (via the header SearchField, which lands
- * here as ?search=), tag chips, a cuisine/difficulty/ingredient/time/sort
- * form, and pagination - every filter RecipeFilterSet supports except the
+ * here as ?search=), tag chips, a cuisine/ingredient/rating/sort form, and
+ * pagination - every filter RecipeFilterSet supports except the
  * one this app has no way to see a caller's own drafts for (there is
  * deliberately no `status`/`user` filter here; this is the public catalogue).
  *
@@ -49,6 +49,7 @@ export default async function ExploreRecipesPage({
     "cuisine_type",
     "difficulty",
     "ingredient",
+    "min_rating",
     "prep_time_min",
     "prep_time_max",
     "cook_time_min",
@@ -66,6 +67,7 @@ export default async function ExploreRecipesPage({
     cuisine_type: current.cuisine_type,
     difficulty: current.difficulty as BrowseParams["difficulty"],
     ingredient: current.ingredient,
+    min_rating: toNumber(current.min_rating ?? ""),
     prep_time_min: toNumber(current.prep_time_min ?? ""),
     prep_time_max: toNumber(current.prep_time_max ?? ""),
     cook_time_min: toNumber(current.cook_time_min ?? ""),
