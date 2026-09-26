@@ -1,7 +1,7 @@
 "use client";
 
 /* Everything on the Explore page that isn't a one-click tag chip: cuisine,
- * ingredient, and sort order. One form, submitted deliberately rather than
+ * ingredient, minimum rating, and sort order. One form, submitted deliberately rather than
  * per keystroke/selection - the ingredient field would otherwise fire a
  * navigation on every character typed.
  *
@@ -28,6 +28,16 @@ import { buildUrl } from "@/features/recipes/browseParams";
 const FIELD =
   "rounded-xl border border-rule bg-field px-3 py-2.5 text-sm text-ink outline-none placeholder:text-muted/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon";
 
+/* "& up" thresholds rather than exact stars: what someone wants is "nothing
+ * below 4", and recipes average to fractions (4.33) that no exact-star option
+ * would ever match. Unrated recipes have no average, so any choice here hides
+ * them - which is the point of asking for a rating. */
+const RATINGS = [
+  { value: "4", label: "4 stars & up" },
+  { value: "3", label: "3 stars & up" },
+  { value: "2", label: "2 stars & up" },
+] as const;
+
 const SORTS = [
   { value: "", label: "Newest" },
   { value: "-view_count", label: "Most viewed" },
@@ -47,6 +57,7 @@ export function FiltersPanel({
 
   const [cuisineType, setCuisineType] = useState(current.cuisine_type ?? "");
   const [ingredient, setIngredient] = useState(current.ingredient ?? "");
+  const [minRating, setMinRating] = useState(current.min_rating ?? "");
   const [ordering, setOrdering] = useState(current.ordering ?? "");
 
   function apply(event: FormEvent) {
@@ -54,6 +65,7 @@ export function FiltersPanel({
     const url = buildUrl(current, {
       cuisine_type: cuisineType,
       ingredient: ingredient.trim(),
+      min_rating: minRating,
       ordering,
       // No longer offered as controls; cleared so an old URL cannot leave a
       // filter applied that nothing on the page can remove.
@@ -95,6 +107,22 @@ export function FiltersPanel({
           placeholder="e.g. chicken"
           className={`${FIELD} w-36 font-normal normal-case tracking-normal`}
         />
+      </label>
+
+      <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+        Rating
+        <select
+          value={minRating}
+          onChange={(e) => setMinRating(e.target.value)}
+          className={`${FIELD} w-auto font-normal normal-case tracking-normal`}
+        >
+          <option value="">Any</option>
+          {RATINGS.map((rating) => (
+            <option key={rating.value} value={rating.value}>
+              {rating.label}
+            </option>
+          ))}
+        </select>
       </label>
 
       <label className="flex flex-col gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">

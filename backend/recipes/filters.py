@@ -1,4 +1,5 @@
-"""Filters for the recipe list: cuisine, difficulty, tags, ingredients, times.
+"""Filters for the recipe list: cuisine, difficulty, tags, ingredients, times,
+minimum rating.
 
 Wired into RecipeViewSet as filterset_class. Search and ordering live on the
 viewset beside it; this file is only the field-by-field narrowing.
@@ -122,6 +123,7 @@ class RecipeFilterSet(filters.FilterSet):
         ?tag=vegan&tag=gluten-free          either tag
         ?ingredient=tofu&ingredient=rice    either ingredient
         ?prep_time_max=20&cook_time_max=30
+        ?min_rating=4                      average of 4.0 or better
         ?user=3                            one cook's recipes
         ?featured=true                     the curated panel
 
@@ -170,6 +172,24 @@ class RecipeFilterSet(filters.FilterSet):
     cook_time_max = filters.NumberFilter(
         field_name='cook_time',
         lookup_expr='lte',
+    )
+
+    # ">= this average". Filters on the avg_score annotation
+    # RecipeViewSet.get_queryset() puts on every queryset, so it compiles to a
+    # HAVING on the same GROUP BY that already exists - and, like the annotation
+    # itself, it depends on that queryset: over one with no avg_score this
+    # raises FieldError rather than quietly returning everything.
+    #
+    # A recipe nobody has rated has a NULL average, and NULL >= anything is
+    # never true, so any minimum leaves unrated recipes out. That is the honest
+    # reading - "no rating" is not "a low rating", and not a 0 to be ranked
+    # against real ones. Bounded to 0-5 so a typo is a 400, not a quiet empty
+    # page.
+    min_rating = filters.NumberFilter(
+        field_name='avg_score',
+        lookup_expr='gte',
+        min_value=0,
+        max_value=5,
     )
 
     class Meta:
