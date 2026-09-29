@@ -2,7 +2,7 @@
 
 /* The admin panel's own frame - deliberately not AppShell.
  *
- * AppShell's nav is Home/Explore/My recipes and its header carries a search
+ * AppShell's nav is Home/Explore/My Collection and its header carries a search
  * box for browsing recipes: the normal-user experience this panel exists to
  * manage, not to be another instance of. An admin reaches this shell through
  * one link in AccountMenu and everything inside it is a different app in

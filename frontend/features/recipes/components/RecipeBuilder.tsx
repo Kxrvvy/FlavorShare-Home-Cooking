@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ApiError,
   addIngredient,
@@ -181,6 +182,8 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
    * can only 404. */
   const [loadError, setLoadError] = useState("");
   const [published, setPublished] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -849,15 +852,20 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
     }
   });
 
+  /* Confirmation is a dialog now, not window.confirm() - see ConfirmDialog's
+   * own header comment for why. This is what its confirm button runs; the
+   * Delete button below only opens the dialog. */
   const discard = busy(async () => {
     if (draftId === null) return;
-    if (!window.confirm("Delete this recipe? This cannot be undone.")) return;
+    setDeleting(true);
     try {
       await deleteRecipe(draftId);
       if (user) refreshCollectionCounts(user.user_id);
       router.push("/me/recipes");
     } catch (error) {
       setNotice(error instanceof ApiError ? error.message : "Could not delete this recipe.");
+      setDeleting(false);
+      setConfirmDeleteOpen(false);
     }
   });
 
@@ -1033,7 +1041,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
           >
             <path d="M15 5l-7 7 7 7" />
           </svg>
-          My recipes
+          My Collection
         </button>
 
         <div className="flex flex-col items-center gap-1.5 justify-self-center">
@@ -1063,7 +1071,7 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
         <div className="flex items-end justify-center gap-4 sm:justify-self-end">
           <button
             type="button"
-            onClick={discard}
+            onClick={() => setConfirmDeleteOpen(true)}
             disabled={locked}
             className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-maroon transition-colors hover:bg-panel disabled:opacity-40"
           >
@@ -1073,7 +1081,12 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
             type="button"
             onClick={publish}
             disabled={locked || published}
-            className="rounded-full bg-maroon px-5 py-2.5 font-display text-sm font-semibold text-card transition-opacity hover:opacity-90 disabled:opacity-50"
+            /* border-transparent, matching Delete's own border width - a
+             * filled button and a bordered one at the same padding still
+             * render at different heights, because a border adds to the box
+             * on top of the padding. An invisible border of the same width
+             * closes that gap without changing how this button looks. */
+            className="rounded-full border border-transparent bg-maroon px-4 py-2 font-display text-xs font-semibold text-card transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {published ? "Published" : "Publish"}
           </button>
@@ -1608,6 +1621,17 @@ export default function RecipeBuilder({ recipeId }: { recipeId?: number }) {
       </section>
       </>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="Delete this recipe?"
+        body="This cannot be undone."
+        confirmLabel="Delete"
+        busyLabel="Deleting..."
+        busy={deleting}
+        onConfirm={discard}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }

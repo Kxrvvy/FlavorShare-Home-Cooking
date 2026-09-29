@@ -137,7 +137,7 @@ export function AccountMenu({ compact = false, onNavigate }: Props) {
             }}
             className="mt-4 block rounded-full border border-rule py-2 text-center font-display text-xs font-medium uppercase tracking-widest text-ink transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
           >
-            My recipes
+            My Collection
           </Link>
 
           <Link
