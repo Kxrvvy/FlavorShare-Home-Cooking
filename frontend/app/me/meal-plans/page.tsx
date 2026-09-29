@@ -130,14 +130,25 @@ function MealPlansList() {
                 <p className="mt-1 text-xs text-muted">{dateRange(plan)}</p>
               </Link>
 
-              <button
-                type="button"
-                disabled={busyId === plan.meal_plan_id}
-                onClick={() => remove(plan)}
-                className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-maroon disabled:opacity-50"
-              >
-                {busyId === plan.meal_plan_id ? "Deleting..." : "Delete"}
-              </button>
+              <div className="flex gap-2">
+                {/* Renaming or changing dates already lives on the plan's own
+                  * page - this is a second, explicit way to reach it rather
+                  * than relying on people noticing the name itself is a link. */}
+                <Link
+                  href={`/me/meal-plans/${plan.meal_plan_id}`}
+                  className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-ink"
+                >
+                  Edit
+                </Link>
+                <button
+                  type="button"
+                  disabled={busyId === plan.meal_plan_id}
+                  onClick={() => remove(plan)}
+                  className="rounded-full border border-rule px-4 py-2 font-display text-xs font-semibold text-maroon disabled:opacity-50"
+                >
+                  {busyId === plan.meal_plan_id ? "Deleting..." : "Delete"}
+                </button>
+              </div>
             </li>
           ))}
         </ul>
