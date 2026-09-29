@@ -151,6 +151,19 @@ export function AccountMenu({ compact = false, onNavigate }: Props) {
             Meal plans
           </Link>
 
+          {user.role !== "admin" && (
+            <Link
+              href="/me/settings"
+              onClick={() => {
+                setOpen(false);
+                onNavigate?.();
+              }}
+              className="mt-2 block rounded-full border border-rule py-2 text-center font-display text-xs font-medium uppercase tracking-widest text-ink transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-maroon"
+            >
+              Settings
+            </Link>
+          )}
+
           {user.role === "admin" && (
             <Link
               href="/admin"
