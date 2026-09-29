@@ -17,7 +17,10 @@ export const metadata: Metadata = {
  */
 export default function MeSettingsPage() {
   return (
-    <AppShell>
+    // hideSearch: this is a page to change your account, not to browse
+    // recipes from - the same reasoning About, Help, and the recipe detail
+    // page give for dropping the global search box.
+    <AppShell hideSearch>
       <div className="mx-auto w-full max-w-[900px] px-5 py-10 lg:px-6 lg:py-14">
         <RequireSignIn next="/me/settings" action="change your account settings">
           <h1 className="font-display text-2xl font-semibold text-ink">Settings</h1>
