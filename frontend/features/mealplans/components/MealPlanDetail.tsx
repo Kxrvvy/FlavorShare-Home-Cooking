@@ -46,13 +46,23 @@ const MEAL_TYPES: { value: MealType; label: string }[] = [
   { value: "snack", label: "Snack" },
 ];
 
+/** A Date's own calendar date, read through its local getters - not
+ * toISOString(), which converts to UTC first and so reports the previous day
+ * for anyone in a timezone ahead of UTC. */
+function toDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function daysBetween(start: string, end: string): string[] {
   const days: string[] = [];
   let cursor = new Date(`${start}T00:00:00`);
   const last = new Date(`${end}T00:00:00`);
 
   while (cursor <= last) {
-    days.push(cursor.toISOString().slice(0, 10));
+    days.push(toDateString(cursor));
     cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
   }
   return days;
