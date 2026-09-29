@@ -11,7 +11,7 @@ import {
 } from "@/lib/collectionCounts";
 import { useSession } from "@/lib/useSession";
 
-/** The counts behind each view of My recipes, from the shared store. */
+/** The counts behind each view of My Collection, from the shared store. */
 export function useCollectionCounts(): CollectionCounts | null {
   const { user } = useSession();
 

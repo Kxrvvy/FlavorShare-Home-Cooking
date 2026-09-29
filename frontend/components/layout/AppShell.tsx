@@ -31,8 +31,8 @@ import {
 
 /* `active` is a predicate rather than a prefix test, because prefixes get this
  * wrong: /recipes/create starts with /recipes, so Explore lit up while you were
- * writing a recipe. Building and editing belong to My recipes; Explore covers
- * browsing and reading. */
+ * writing a recipe. Building and editing belong to My Collection; Explore
+ * covers browsing and reading. */
 const NAV = [
   {
     label: "Home",
@@ -47,19 +47,19 @@ const NAV = [
     icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm5.5 12.5L21 21",
   },
   {
-    label: "My recipes",
+    label: "Meal plans",
+    href: "/me/meal-plans",
+    active: (p: string) => p.startsWith("/me/meal-plans"),
+    icon: "M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5.5zM4 9.5h16M8 3v3M16 3v3",
+  },
+  {
+    label: "My Collection",
     href: "/me/recipes",
     active: (p: string) =>
       p.startsWith("/me/recipes") ||
       p === "/recipes/create" ||
       /^\/recipes\/\d+\/edit$/.test(p),
     icon: "M6 4h11a1 1 0 0 1 1 1v15l-6-3-6 3V5a1 1 0 0 1 1-1z",
-  },
-  {
-    label: "Meal plans",
-    href: "/me/meal-plans",
-    active: (p: string) => p.startsWith("/me/meal-plans"),
-    icon: "M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5.5zM4 9.5h16M8 3v3M16 3v3",
   },
 ];
 
@@ -157,10 +157,13 @@ type ShellProps = {
   hideSearch?: boolean;
 };
 
-/* The views of My recipes, shown beneath it rather than as a group of their
- * own. As a separate group one of them was "Your Recipes" while the nav above
- * already had "My recipes" - two names for one page. Nested, they read as what
- * they are: one destination and the ways of looking at it.
+/* The views of My Collection, shown beneath it rather than as a group of
+ * their own. As a separate group one of them was "Your Recipes" while the nav
+ * above already had "My recipes" - two names for one page. Nested, they read
+ * as what they are: one destination and the ways of looking at it. Renaming
+ * the nav item to "My Collection" only sharpened that - "Saved", "Your
+ * recipes" and "Published" are categories within a collection, not
+ * synonyms for the collection itself.
  */
 const COLLECTION = [
   { label: "All", show: "all", icon: "M4 6h16M4 12h16M4 18h16" },

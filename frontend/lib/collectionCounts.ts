@@ -1,6 +1,6 @@
 import { listMyRecipes, listSavedRecipes } from "@/features/recipes/api";
 
-/* How many recipes sit behind each view of My recipes.
+/* How many recipes sit behind each view of My Collection.
  *
  * A module store rather than per-component state, for two reasons the sweep
  * found. AppShell is rendered by every page, so fetching on mount meant two API

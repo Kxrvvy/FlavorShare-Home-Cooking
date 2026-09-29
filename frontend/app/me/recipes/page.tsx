@@ -336,9 +336,11 @@ function MyRecipesList() {
 
 /* Tabs here rather than links in the sidebar.
  *
- * The rail already has a My recipes item, and a collection group beside it
+ * The rail already has a My Collection item, and a collection group beside it
  * repeated the same destination - "Your Recipes" in the group and "My recipes"
- * in the nav were one page under two names. Filtering belongs to the page it
+ * in the nav were one page under two names (the nav item's later rename to
+ * "My Collection" is what that group's sub-categories, Saved/Your
+ * recipes/Published, are meant to sit under). Filtering belongs to the page it
  * filters, and here the active tab can be shown honestly: this page already
  * reads the query string, which the shell cannot do without forcing a Suspense
  * boundary onto every page that renders it.
@@ -384,7 +386,7 @@ export default function MyRecipesPage() {
           <header className="mb-6">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <h1 className="font-display text-2xl font-semibold text-ink lg:text-3xl">
-                My recipes
+                My Collection
               </h1>
             <Link
               href="/recipes/create"

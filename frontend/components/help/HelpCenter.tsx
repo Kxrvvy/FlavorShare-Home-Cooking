@@ -37,7 +37,7 @@ const GUIDES: Guide[] = [
     id: "saving",
     title: "Saving a recipe",
     paragraphs: [
-      "The bookmark icon on a recipe card or on a recipe's own page saves it to your account. Saved recipes show up under My recipes, in the Saved tab.",
+      "The bookmark icon on a recipe card or on a recipe's own page saves it to your account. Saved recipes show up under My Collection, in the Saved tab.",
       "Saving needs an account - a guest can browse, search, and read any published recipe, but the bookmark icon only works once you're signed in.",
     ],
   },
@@ -45,7 +45,7 @@ const GUIDES: Guide[] = [
     id: "publishing",
     title: "Publishing a recipe",
     paragraphs: [
-      "From My recipes, start a new recipe to open the builder. You'll fill in a title, a cover photo, your ingredients (an amount, a unit, and a name for each - the amount box takes a plain number like 2, or a fraction like 1/2 or 1 1/2), and your steps, each with an optional photo of its own.",
+      "From My Collection, start a new recipe to open the builder. You'll fill in a title, a cover photo, your ingredients (an amount, a unit, and a name for each - the amount box takes a plain number like 2, or a fraction like 1/2 or 1 1/2), and your steps, each with an optional photo of its own.",
       "A recipe stays a Draft, visible only to you, until you publish it. Nobody else can see it - not in search, not in Explore, not through a direct link - until you do.",
     ],
   },
