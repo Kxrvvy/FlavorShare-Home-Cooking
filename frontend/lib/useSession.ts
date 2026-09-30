@@ -11,7 +11,7 @@ import {
 
 /* Who is signed in, for components that render.
  *
- * The session lives in localStorage, which does not exist on the server, so the
+ * The session lives in sessionStorage, which does not exist on the server, so the
  * two renders of the same markup would disagree: "signed out" from the server,
  * "signed in" from the browser. That is a hydration mismatch - React throws away
  * the server HTML and warns.

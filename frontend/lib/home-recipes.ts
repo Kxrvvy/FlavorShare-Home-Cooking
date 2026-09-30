@@ -10,7 +10,7 @@ import type { Paginated, Recipe } from "./types";
  * also keeps this isomorphic: the homepage calls these from a Server
  * Component at first render, and ExploreRecipes/Explore's own filters call
  * them again from the browser, and neither needs the other's
- * localStorage-backed session machinery.
+ * sessionStorage-backed session machinery.
  *
  * "no-store" rather than a revalidate window: a freshly published or
  * featured recipe should appear on the next load, not after a cache

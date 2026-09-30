@@ -13,7 +13,7 @@ import { useSession } from "@/lib/useSession";
  * refused to submit it. Saying so at the door costs them nothing.
  *
  * A courtesy, not a security boundary. The session it reads lives in
- * localStorage, so anyone can forge one; what actually protects a recipe is the
+ * sessionStorage, so anyone can forge one; what actually protects a recipe is the
  * API, which answers 401 to an unauthenticated POST whatever the browser
  * believes. This is the sign on the door, not the lock.
  *
