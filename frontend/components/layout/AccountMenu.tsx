@@ -9,7 +9,7 @@ import { useSession } from "@/lib/useSession";
 /* The desktop header's account control - the only part of the header that knows
  * who you are.
  *
- * A client component because the session lives in localStorage. It is kept this
+ * A client component because the session lives in sessionStorage. It is kept this
  * small on purpose: SiteHeader stays a Server Component, so Logo and SearchField
  * do not follow it into the client bundle. MobileMenu is drawn the same way, and
  * the comment at the top of that file explains the same reasoning.

@@ -16,7 +16,7 @@ export const metadata: Metadata = {
  * ?recipe=<id>, so there is nothing here but the id and the sign-in gate.
  *
  * Whether this recipe is *yours* is not decided here and cannot be. The session
- * lives in localStorage, so the id is checked by the API, which answers 404 for
+ * lives in sessionStorage, so the id is checked by the API, which answers 404 for
  * somebody else's draft - visible_recipes() never returns it - and the builder
  * shows that as "Could not open this recipe." A server-side check would need
  * the token, which the server does not have.

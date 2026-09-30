@@ -6,18 +6,22 @@
  * so a signed-in user was told to sign in. Two files agreeing on a string by
  * coincidence is not a contract - this is.
  *
- * Nothing outside this file should touch localStorage for auth. If you find
- * yourself writing localStorage.getItem("access") somewhere, add a function
+ * Nothing outside this file should touch sessionStorage for auth. If you find
+ * yourself writing sessionStorage.getItem("access") somewhere, add a function
  * here instead.
  *
  * It is also a subscribable store, because components have to re-render when
- * the session changes and localStorage fires no event for a write made by the
- * page that owns it. See subscribeToSession below.
+ * the session changes and sessionStorage fires no event for a write made by
+ * the page that owns it. See subscribeToSession below.
  *
- * Storage, not security. A token in localStorage is readable by any script on
- * the page, which is the known trade of the token-in-the-browser approach the
- * API was built for. Keeping it in one module at least means there is a single
- * place to change if that decision is ever revisited.
+ * sessionStorage, not localStorage: a session belongs to one tab. Closing the
+ * tab ends it - reopening the site is signed out, not still logged in - and,
+ * as a consequence, no two tabs ever share one session to begin with.
+ *
+ * Storage, not security. A token in sessionStorage is readable by any script
+ * on the page, which is the known trade of the token-in-the-browser approach
+ * the API was built for. Keeping it in one module at least means there is a
+ * single place to change if that decision is ever revisited.
  */
 
 import axios from "axios";
@@ -46,11 +50,12 @@ const ACCESS_KEY = "access";
 const REFRESH_KEY = "refresh";
 const USER_KEY = "user";
 
-/* localStorage does not exist while rendering on the server. Every caller today
- * is a client component, but a helper that throws the moment someone imports it
- * into a Server Component is a trap, so each accessor checks first. */
+/* sessionStorage does not exist while rendering on the server. Every caller
+ * today is a client component, but a helper that throws the moment someone
+ * imports it into a Server Component is a trap, so each accessor checks
+ * first. */
 function storage(): Storage | null {
-  return typeof window === "undefined" ? null : window.localStorage;
+  return typeof window === "undefined" ? null : window.sessionStorage;
 }
 
 /* ------------------------------------------------------------------ the store */
@@ -63,20 +68,15 @@ function notify(): void {
 
 /** Watch for session changes. Returns the unsubscribe function.
  *
- * Two sources, because neither covers the other:
- *
- *   the listener set - writes made by this tab. localStorage fires no event for
- *     its own page, so setSession and clearSession call notify() themselves.
- *   the 'storage' event - writes made by OTHER tabs. Signing out in one tab
- *     therefore signs out the header in every other open tab.
+ * Only one source: writes made by this tab. sessionStorage fires no event for
+ * its own page, so setSession and clearSession call notify() themselves. There
+ * is no cross-tab event to also listen for - a session belongs to one tab, so
+ * no other tab's session could ever change this one's.
  */
 export function subscribeToSession(listener: () => void): () => void {
   listeners.add(listener);
-  window.addEventListener("storage", listener);
-
   return () => {
     listeners.delete(listener);
-    window.removeEventListener("storage", listener);
   };
 }
 
@@ -98,7 +98,7 @@ export function parseSessionUser(raw: string | null): SessionUser | null {
   try {
     return JSON.parse(raw) as SessionUser;
   } catch {
-    // Anything can end up in localStorage - a half-written value, a leftover
+    // Anything can end up in sessionStorage - a half-written value, a leftover
     // from an older shape. Treat unreadable as signed out rather than throwing
     // in whichever component happened to ask.
     return null;
@@ -171,7 +171,7 @@ export function clearSession(): void {
  * Never throws, and clears local state in a finally. The endpoint answers 400
  * for a token that is expired or already blacklisted, and somebody who clicked
  * "Sign out" has to end up signed out either way - leaving a dead token in
- * localStorage because the server disliked it is the worse outcome.
+ * sessionStorage because the server disliked it is the worse outcome.
  *
  * Sends the access token too: /accounts/logout/ is IsRegisteredUser, so an
  * unauthenticated POST would be refused before the refresh token is even read.

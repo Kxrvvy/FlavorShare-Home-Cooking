@@ -7,7 +7,7 @@ import { useSession } from "@/lib/useSession";
 
 /* Gate for /admin. The same three-state shape RequireSignIn uses, and the
  * same caveat: this is the sign on the door, not the lock. The session lives
- * in localStorage, so anyone can forge one; what actually refuses a
+ * in sessionStorage, so anyone can forge one; what actually refuses a
  * non-admin is IsAdmin on every endpoint this page calls. A signed-in
  * registered user who somehow lands here gets told plainly rather than
  * seeing a page full of failed requests.
