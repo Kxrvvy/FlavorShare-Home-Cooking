@@ -25,9 +25,9 @@ from django.contrib.auth.models import PermissionsMixin
 from django.db import models
 from django.utils import timezone
 
-#: How long a one-time code stays usable. Ten minutes is long enough to fetch
+#: How long a one-time code stays usable. Five minutes is long enough to fetch
 #: an email and short enough that a leaked code is worth little.
-OTP_TTL = timedelta(minutes=10)
+OTP_TTL = timedelta(minutes=5)
 
 #: Digits in a one-time code. Six is what people expect to be asked to type.
 OTP_LENGTH = 6
@@ -59,7 +59,7 @@ def default_otp_expiry():
     Evaluated microseconds apart from created_at's auto_now_add rather than
     being exactly created_at + OTP_TTL. That difference is not worth a second
     write to reconcile, but it is worth knowing before anyone treats
-    expires_at - created_at as an exact ten minutes.
+    expires_at - created_at as an exact five minutes.
     """
     return timezone.now() + OTP_TTL
 
@@ -327,7 +327,7 @@ class PendingSignup(OneTimeCodeBase):
     the code expires first, nothing was ever created.
 
     The password is hashed here, at registration, and stored hashed. Keeping a
-    plaintext password for ten minutes to hash later would be the easier
+    plaintext password for five minutes to hash later would be the easier
     implementation and the wrong trade.
     """
 
