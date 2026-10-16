@@ -33,6 +33,20 @@ from rest_framework import serializers
 from .models import OTP_LENGTH, OneTimeCode, PendingSignup, User
 
 
+def validate_no_spaces(value):
+    """A password may not contain any whitespace.
+
+    Used on every field that *sets* a password, alongside validate_password,
+    so a password with a space in it can never be created - and so never has to
+    be typed at login. Every such field also sets trim_whitespace=False:
+    DRF's CharField otherwise strips leading and trailing spaces before
+    validators run, which would quietly accept " secret" as "secret" instead of
+    reporting it.
+    """
+    if any(ch.isspace() for ch in value):
+        raise serializers.ValidationError('Password cannot contain spaces.')
+
+
 class UserSerializer(serializers.ModelSerializer):
     """A user's own profile - used to read and to edit it.
 
@@ -72,8 +86,9 @@ class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=100)
     password = serializers.CharField(
         write_only=True,
+        trim_whitespace=False,
         style={'input_type': 'password'},
-        validators=[validate_password],
+        validators=[validate_no_spaces, validate_password],
     )
     dietary_preferences = serializers.CharField(
         required=False,
@@ -322,8 +337,9 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     code = serializers.CharField(min_length=OTP_LENGTH, max_length=OTP_LENGTH)
     new_password = serializers.CharField(
         write_only=True,
+        trim_whitespace=False,
         style={'input_type': 'password'},
-        validators=[validate_password],
+        validators=[validate_no_spaces, validate_password],
     )
 
     def validate(self, attrs):
@@ -419,8 +435,9 @@ class PasswordChangeSerializer(serializers.Serializer):
     )
     new_password = serializers.CharField(
         write_only=True,
+        trim_whitespace=False,
         style={'input_type': 'password'},
-        validators=[validate_password],
+        validators=[validate_no_spaces, validate_password],
     )
 
     def validate_current_password(self, value):

@@ -9,6 +9,7 @@ import axios from 'axios';
 import { API_BASE_URL } from '@/lib/api';
 import { setSession } from '@/lib/auth';
 import { safeNextPath } from '@/lib/navigation';
+import { PASSWORD_SPACES_ERROR } from '@/lib/validation';
 
 interface FormData {
   username: string;
@@ -57,6 +58,8 @@ export default function LoginPage() {
 
     if (!formData.password) {
       newErrors.password = 'Password is required';
+    } else if (/\s/.test(formData.password)) {
+      newErrors.password = PASSWORD_SPACES_ERROR;
     }
 
     return newErrors;
