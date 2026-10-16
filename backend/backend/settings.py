@@ -352,7 +352,7 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': None if TESTING else '100/hour',
+        'anon': None if TESTING else '1000/hour',
         'user': None if TESTING else '1000/hour',
         # Register / resend-otp / password-reset-request: caps how often
         # this server will ask Brevo to send mail from one IP, so scripted
