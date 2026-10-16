@@ -200,7 +200,7 @@ class VerifyEmailView(APIView):
 class ResendOTPView(APIView):
     """POST /api/accounts/resend-otp/ - email a fresh code for a live signup.
 
-    Expects {"email": ...}. The new code gets a full ten minutes, not whatever
+    Expects {"email": ...}. The new code gets a full five minutes, not whatever
     was left of the old one: resending because the first mail never arrived
     should not hand someone a code that dies in ninety seconds.
 
