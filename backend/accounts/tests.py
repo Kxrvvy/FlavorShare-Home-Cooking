@@ -654,6 +654,17 @@ class PasswordChangeTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_new_password_with_a_space_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {'current_password': self.CURRENT, 'new_password': 'an0ther real-pw'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Password cannot contain spaces.', response.data['new_password'])
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(self.CURRENT))
+
     def test_reusing_the_current_password_is_rejected(self):
         response = self.client.post(
             self.url,
@@ -1358,6 +1369,17 @@ class RegisterTests(SignupFlowTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(PendingSignup.objects.exists())
+
+    def test_a_password_with_a_space_is_refused(self):
+        """Inside, leading and trailing - the last two would be silently
+        stripped by DRF's CharField if trim_whitespace were left on."""
+        for bad in (f'{PASSWORD[:4]} {PASSWORD[4:]}', f' {PASSWORD}', f'{PASSWORD} '):
+            with self.subTest(password=repr(bad)):
+                response = self.register(password=bad)
+
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn('Password cannot contain spaces.', response.data['password'])
+                self.assertFalse(PendingSignup.objects.exists())
 
 
 class RegisterEmailFailureTests(SignupFlowTestCase):

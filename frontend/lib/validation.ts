@@ -21,9 +21,15 @@ const MIN_LENGTH = 8;
  * original signup form because it is what the form already promised users. */
 const STRENGTH = /^(?=.*[A-Z])(?=.*[!@#$%^&*(),.?":{}|<>]).*$/;
 
+/** Shown on signup, reset and login alike - no password can contain a space,
+ * so a typed one that does is wrong before it is ever sent. */
+export const PASSWORD_SPACES_ERROR = "Password cannot contain spaces";
+
 /** Returns a message to show, or null when the password is acceptable. */
 export function validatePassword(password: string): string | null {
   if (!password) return "Password is required";
+
+  if (/\s/.test(password)) return PASSWORD_SPACES_ERROR;
 
   if (password.length < MIN_LENGTH) {
     return `Password must be at least ${MIN_LENGTH} characters`;
